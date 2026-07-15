@@ -217,7 +217,7 @@ def espacio_virtual():
             <p class="text-gray-500 mt-2">Elige una ventana para entrar</p>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-5xl w-full">
+        <div class="grid grid-cols-2 gap-6 max-w-2xl w-full">
 
             <!-- Ventana 1: Notas -->
             <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
