@@ -567,23 +567,43 @@ def quien_eres():
             if not nombre:
                 mensaje_error = "Escribe un nombre antes de continuar."
             else:
-                conn = get_conn()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute(
-                        'INSERT INTO usuarios (espacio, slot, nombre, genero) VALUES (%s, %s, %s, %s)',
-                        (codigo, slot, nombre, genero)
-                    )
-                    conn.commit()
-                    session['mi_slot'] = slot
+                ocupados_actual = obtener_usuarios(codigo)
+                nombre_duplicado = any(
+                    datos['nombre'].strip().lower() == nombre.lower()
+                    for s_existente, datos in ocupados_actual.items() if s_existente != slot
+                )
+                if nombre_duplicado:
+                    mensaje_error = ('Ya hay alguien registrado en este espacio con el nombre "' + nombre + '". '
+                                      'Si esa persona eres tú, usa el botón "Soy ' + nombre + '" más abajo para identificarte. '
+                                      'Si eres otra persona, usa un nombre distinto (por ejemplo, agrega tu apellido o una inicial).')
+                else:
+                    conn = get_conn()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            'INSERT INTO usuarios (espacio, slot, nombre, genero) VALUES (%s, %s, %s, %s)',
+                            (codigo, slot, nombre, genero)
+                        )
+                        conn.commit()
+                        session['mi_slot'] = slot
+                        cursor.close()
+                        conn.close()
+                        return redirect(url_for('espacio_virtual'))
+                    except psycopg2.errors.UniqueViolation:
+                        conn.rollback()
+                        mensaje_error = "Ese bloque ya fue tomado por otra persona. Elige el otro."
                     cursor.close()
                     conn.close()
-                    return redirect(url_for('espacio_virtual'))
-                except psycopg2.errors.UniqueViolation:
-                    conn.rollback()
-                    mensaje_error = "Ese bloque ya fue tomado por otra persona. Elige el otro."
-                cursor.close()
-                conn.close()
+
+        elif accion == 'liberar' and slot in (1, 2):
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM usuarios WHERE espacio = %s AND slot = %s', (codigo, slot))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            if session.get('mi_slot') == slot:
+                session.pop('mi_slot', None)
 
     ocupados = obtener_usuarios(codigo)
     slot_libre = None
@@ -633,34 +653,48 @@ def quien_eres():
                 </form>
 
                 {% if ocupados %}
-                    <div class="mt-6 pt-4 border-t border-gray-100 space-y-2">
+                    <div class="mt-6 pt-4 border-t border-gray-100 space-y-3">
                         <p class="text-xs text-gray-400 mb-1">¿Ya habías elegido tu nombre antes en otro dispositivo?</p>
                         {% for s, datos in ocupados.items() %}
-                        <form method="POST">
-                            <input type="hidden" name="slot" value="{{ s }}">
-                            <input type="hidden" name="accion" value="soy_yo">
-                            <button type="submit" class="w-full text-sm py-2 px-4 rounded-xl border-2 font-semibold transition-all
-                                {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
-                                {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
-                                {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
-                            ">Soy {{ datos.nombre }}</button>
-                        </form>
+                        <div>
+                            <form method="POST">
+                                <input type="hidden" name="slot" value="{{ s }}">
+                                <input type="hidden" name="accion" value="soy_yo">
+                                <button type="submit" class="w-full text-sm py-2 px-4 rounded-xl border-2 font-semibold transition-all
+                                    {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
+                                    {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
+                                    {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
+                                ">Soy {{ datos.nombre }} <span class="opacity-60 font-normal">· lugar {{ s }}</span></button>
+                            </form>
+                            <form method="POST" onsubmit="return confirm('¿Seguro que quieres liberar el lugar {{ s }} ({{ datos.nombre }})? La persona tendrá que registrarse de nuevo.');" class="mt-1">
+                                <input type="hidden" name="slot" value="{{ s }}">
+                                <input type="hidden" name="accion" value="liberar">
+                                <button type="submit" class="w-full text-[11px] text-gray-400 hover:text-red-400 underline">No soy yo, liberar este lugar</button>
+                            </form>
+                        </div>
                         {% endfor %}
                     </div>
                 {% endif %}
             {% else %}
                 <p class="text-sm text-gray-500 mb-4">Ya hay dos personas en este espacio. ¿Cuál de ellas eres?</p>
-                <div class="space-y-3">
+                <div class="space-y-4">
                     {% for s, datos in ocupados.items() %}
-                    <form method="POST">
-                        <input type="hidden" name="slot" value="{{ s }}">
-                        <input type="hidden" name="accion" value="soy_yo">
-                        <button type="submit" class="w-full py-3 px-4 rounded-2xl border-2 font-semibold transition-all
-                            {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
-                            {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
-                            {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
-                        ">Soy {{ datos.nombre }}</button>
-                    </form>
+                    <div>
+                        <form method="POST">
+                            <input type="hidden" name="slot" value="{{ s }}">
+                            <input type="hidden" name="accion" value="soy_yo">
+                            <button type="submit" class="w-full py-3 px-4 rounded-2xl border-2 font-semibold transition-all
+                                {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
+                                {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
+                                {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
+                            ">Soy {{ datos.nombre }} <span class="opacity-60 font-normal">· lugar {{ s }}</span></button>
+                        </form>
+                        <form method="POST" onsubmit="return confirm('¿Seguro que quieres liberar el lugar {{ s }} ({{ datos.nombre }})? La persona tendrá que registrarse de nuevo.');" class="mt-1">
+                            <input type="hidden" name="slot" value="{{ s }}">
+                            <input type="hidden" name="accion" value="liberar">
+                            <button type="submit" class="w-full text-[11px] text-gray-400 hover:text-red-400 underline">No soy yo, liberar este lugar</button>
+                        </form>
+                    </div>
                     {% endfor %}
                 </div>
             {% endif %}
