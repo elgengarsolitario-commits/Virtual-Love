@@ -345,6 +345,11 @@ def quien_eres():
                 conn.close()
 
     ocupados = obtener_usuarios(codigo)
+    slot_libre = None
+    for s in (1, 2):
+        if s not in ocupados:
+            slot_libre = s
+            break
 
     html_quien_eres = '''
     <!DOCTYPE html>
@@ -356,70 +361,80 @@ def quien_eres():
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-pink-50 min-h-screen flex items-center justify-center font-sans p-4">
-        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-2xl w-full border border-pink-100 text-center">
+        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-pink-100 text-center">
             <h1 class="text-2xl font-bold text-pink-600 mb-1">¿Quién eres tú? 💭</h1>
-            <p class="text-gray-500 text-sm mb-6">Elige tu bloque para que sepamos quién escribe cada nota.</p>
+            <p class="text-gray-500 text-sm mb-6">Así sabremos quién escribe cada nota.</p>
 
             {% if error %}
                 <div class="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 border border-red-100">{{ error }}</div>
             {% endif %}
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {% for slot in [1, 2] %}
-                <div class="rounded-3xl border-2 p-6
-                    {% if slot in ocupados %}
-                        {% if ocupados[slot].genero == 'hombre' %} bg-blue-50 border-blue-200
-                        {% elif ocupados[slot].genero == 'mujer' %} bg-pink-50 border-pink-200
-                        {% else %} bg-gray-50 border-gray-200 {% endif %}
-                    {% else %} bg-white border-dashed border-gray-200 {% endif %}
-                ">
-                    <p class="text-xs uppercase tracking-wider text-gray-400 font-semibold mb-3">Bloque {{ slot }}</p>
+            {% if slot_libre %}
+                <form method="POST" class="space-y-4 text-left">
+                    <input type="hidden" name="slot" value="{{ slot_libre }}">
+                    <input type="hidden" name="accion" value="crear">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Tu nombre</label>
+                        <input type="text" name="nombre" placeholder="Tu nombre" autofocus
+                            class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none text-center text-lg text-pink-600 font-medium">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Tu género</label>
+                        <select name="genero" class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none text-center">
+                            <option value="hombre">Hombre 💙</option>
+                            <option value="mujer">Mujer 💗</option>
+                            <option value="nd">Prefiero no decir</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
+                        Guardar y continuar ✨
+                    </button>
+                </form>
 
-                    {% if slot in ocupados %}
-                        <p class="text-lg font-bold
-                            {% if ocupados[slot].genero == 'hombre' %} text-blue-600
-                            {% elif ocupados[slot].genero == 'mujer' %} text-pink-600
-                            {% else %} text-gray-600 {% endif %}
-                        ">{{ ocupados[slot].nombre }}</p>
-                        <form method="POST" class="mt-4">
-                            <input type="hidden" name="slot" value="{{ slot }}">
+                {% if ocupados %}
+                    <div class="mt-6 pt-4 border-t border-gray-100 space-y-2">
+                        <p class="text-xs text-gray-400 mb-1">¿Ya habías elegido tu nombre antes en otro dispositivo?</p>
+                        {% for s, datos in ocupados.items() %}
+                        <form method="POST">
+                            <input type="hidden" name="slot" value="{{ s }}">
                             <input type="hidden" name="accion" value="soy_yo">
-                            <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white text-sm font-semibold py-2 px-4 rounded-xl transition-all">
-                                Soy yo, continuar
+                            <button type="submit" class="w-full text-sm py-2 px-4 rounded-xl border-2 font-semibold transition-all
+                                {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
+                                {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
+                                {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
+                            ">
+                                Soy {{ datos.nombre }}
                             </button>
                         </form>
-                    {% else %}
-                        <form method="POST" class="space-y-3 text-left">
-                            <input type="hidden" name="slot" value="{{ slot }}">
-                            <input type="hidden" name="accion" value="crear">
-                            <div>
-                                <label class="block text-xs text-gray-500 mb-1">Tu nombre</label>
-                                <input type="text" name="nombre" placeholder="Tu nombre"
-                                    class="w-full px-3 py-2 rounded-xl border-2 border-gray-100 focus:border-pink-300 focus:outline-none text-sm">
-                            </div>
-                            <div>
-                                <label class="block text-xs text-gray-500 mb-1">Tu género</label>
-                                <select name="genero" class="w-full px-3 py-2 rounded-xl border-2 border-gray-100 focus:border-pink-300 focus:outline-none text-sm">
-                                    <option value="hombre">Hombre 💙</option>
-                                    <option value="mujer">Mujer 💗</option>
-                                    <option value="nd">Prefiero no decir</option>
-                                </select>
-                            </div>
-                            <button type="submit" class="w-full bg-white hover:bg-pink-50 text-pink-500 font-semibold py-2 px-4 rounded-xl border-2 border-pink-200 transition-all text-sm">
-                                Guardar y continuar
-                            </button>
-                        </form>
-                    {% endif %}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% else %}
+                <p class="text-sm text-gray-500 mb-4">Ya hay dos personas en este espacio. ¿Cuál de ellas eres?</p>
+                <div class="space-y-3">
+                    {% for s, datos in ocupados.items() %}
+                    <form method="POST">
+                        <input type="hidden" name="slot" value="{{ s }}">
+                        <input type="hidden" name="accion" value="soy_yo">
+                        <button type="submit" class="w-full py-3 px-4 rounded-2xl border-2 font-semibold transition-all
+                            {% if datos.genero == 'hombre' %} bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100
+                            {% elif datos.genero == 'mujer' %} bg-pink-50 border-pink-200 text-pink-600 hover:bg-pink-100
+                            {% else %} bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100 {% endif %}
+                        ">
+                            Soy {{ datos.nombre }}
+                        </button>
+                    </form>
+                    {% endfor %}
                 </div>
-                {% endfor %}
-            </div>
+            {% endif %}
 
             <a href="/salir" class="text-xs text-gray-400 hover:text-red-400 underline mt-8 inline-block">Cerrar sesión</a>
         </div>
     </body>
     </html>
     '''
-    return render_template_string(html_quien_eres, codigo_sala=codigo, ocupados=ocupados, error=mensaje_error)
+    return render_template_string(html_quien_eres, codigo_sala=codigo, ocupados=ocupados,
+                                   slot_libre=slot_libre, error=mensaje_error)
 
 
 # === MENÚ DE NOTITAS ===
