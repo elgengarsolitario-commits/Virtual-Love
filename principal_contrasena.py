@@ -212,7 +212,9 @@ def espacio_virtual():
             'genero': genero,
             'contenido': contenido,
             'fecha': creado_en.strftime('%d/%m/%Y %H:%M') if creado_en else '',
-            'rotacion': round(random.uniform(-4, 4), 1)
+            'rotacion': round(random.uniform(-12, 12), 1),
+            'top': round(random.uniform(2, 88), 1),
+            'left': round(random.uniform(1, 84), 1)
         })
 
     html_espacio = '''
@@ -251,25 +253,43 @@ def espacio_virtual():
             }
             .ventana:hover::before { opacity: 1; }
 
-            .muro-notas {
-                background-image:
-                    radial-gradient(circle at 20% 30%, rgba(244,114,182,0.06) 0%, transparent 45%),
-                    radial-gradient(circle at 80% 70%, rgba(244,114,182,0.06) 0%, transparent 45%);
-                border-radius: 2rem;
+            .fondo-notas {
+                position: fixed;
+                inset: 0;
+                overflow: hidden;
+                z-index: 0;
+                pointer-events: none;
             }
-            .nota-mini {
-                transition: transform 0.25s ease, box-shadow 0.25s ease;
-                box-shadow: 0 6px 16px -6px rgba(0,0,0,0.12);
+            .nota-fondo {
+                position: absolute;
+                width: 170px;
+                padding: 14px;
+                border-radius: 16px;
+                filter: blur(2.5px);
+                opacity: 0.55;
             }
-            .nota-mini:hover {
-                transform: scale(1.08) rotate(0deg) !important;
-                box-shadow: 0 14px 28px -10px rgba(236,72,153,0.35);
-                z-index: 20;
+            .contenido-principal {
                 position: relative;
+                z-index: 10;
             }
         </style>
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center py-12 px-4">
+
+        <div class="fondo-notas">
+            {% for n in notas %}
+            <div class="nota-fondo
+                {% if n.genero == 'hombre' %} bg-blue-100
+                {% elif n.genero == 'mujer' %} bg-pink-100
+                {% else %} bg-gray-100 {% endif %}
+            " style="top: {{ n.top }}%; left: {{ n.left }}%; transform: rotate({{ n.rotacion }}deg);">
+                <p class="text-[10px] font-bold uppercase text-gray-500 mb-1">{{ n.nombre }}</p>
+                <p class="text-xs text-gray-600">{{ n.contenido }}</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="contenido-principal w-full flex flex-col items-center">
 
         <div class="w-full max-w-5xl flex justify-end mb-4">
             <a href="/salir"
@@ -336,34 +356,13 @@ def espacio_virtual():
 
         </div>
 
-        {% if notas %}
-        <div class="muro-notas w-full max-w-5xl mt-12 pt-8 pb-4 px-4">
-            <div class="flex items-center justify-center gap-2 mb-6">
-                <span class="text-xl">💌</span>
-                <h2 class="text-pink-500 font-bold text-lg">Notitas que se han dejado por aquí</h2>
-            </div>
-            <div class="columns-2 sm:columns-3 md:columns-4 gap-4 space-y-4">
-                {% for n in notas %}
-                <div class="nota-mini break-inside-avoid rounded-2xl p-4 border-2
-                    {% if n.genero == 'hombre' %} bg-blue-50 border-blue-200
-                    {% elif n.genero == 'mujer' %} bg-pink-50 border-pink-200
-                    {% else %} bg-gray-50 border-gray-200 {% endif %}
-                " style="transform: rotate({{ n.rotacion }}deg);">
-                    <p class="text-[11px] font-bold uppercase tracking-wide mb-1
-                        {% if n.genero == 'hombre' %} text-blue-500
-                        {% elif n.genero == 'mujer' %} text-pink-500
-                        {% else %} text-gray-500 {% endif %}
-                    ">{{ n.nombre }}</p>
-                    <p class="text-gray-700 text-sm whitespace-pre-wrap">{{ n.contenido }}</p>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% else %}
-        <div class="w-full max-w-5xl mt-12 text-center">
+        {% if not notas %}
+        <div class="w-full max-w-5xl mt-8 text-center">
             <p class="text-sm text-gray-400">Todavía no hay notitas por aquí… ¡anímate a dejar la primera! 💭</p>
         </div>
         {% endif %}
+
+        </div>
     </body>
     </html>
     '''
