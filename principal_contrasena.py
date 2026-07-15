@@ -194,6 +194,27 @@ def espacio_virtual():
     if 'mi_slot' not in session:
         return redirect(url_for('quien_eres'))
 
+    codigo = session['espacio_activo']
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT nombre, genero, contenido, creado_en FROM notas WHERE espacio = %s ORDER BY creado_en DESC',
+        (codigo,)
+    )
+    filas = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    notas = []
+    for nombre, genero, contenido, creado_en in filas:
+        notas.append({
+            'nombre': nombre,
+            'genero': genero,
+            'contenido': contenido,
+            'fecha': creado_en.strftime('%d/%m/%Y %H:%M') if creado_en else '',
+            'rotacion': round(random.uniform(-4, 4), 1)
+        })
+
     html_espacio = '''
     <!DOCTYPE html>
     <html lang="es">
@@ -229,6 +250,23 @@ def espacio_virtual():
                 opacity: 0; transition: opacity 0.35s ease; pointer-events: none;
             }
             .ventana:hover::before { opacity: 1; }
+
+            .muro-notas {
+                background-image:
+                    radial-gradient(circle at 20% 30%, rgba(244,114,182,0.06) 0%, transparent 45%),
+                    radial-gradient(circle at 80% 70%, rgba(244,114,182,0.06) 0%, transparent 45%);
+                border-radius: 2rem;
+            }
+            .nota-mini {
+                transition: transform 0.25s ease, box-shadow 0.25s ease;
+                box-shadow: 0 6px 16px -6px rgba(0,0,0,0.12);
+            }
+            .nota-mini:hover {
+                transform: scale(1.08) rotate(0deg) !important;
+                box-shadow: 0 14px 28px -10px rgba(236,72,153,0.35);
+                z-index: 20;
+                position: relative;
+            }
         </style>
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center py-12 px-4">
@@ -297,10 +335,39 @@ def espacio_virtual():
             </a>
 
         </div>
+
+        {% if notas %}
+        <div class="muro-notas w-full max-w-5xl mt-12 pt-8 pb-4 px-4">
+            <div class="flex items-center justify-center gap-2 mb-6">
+                <span class="text-xl">💌</span>
+                <h2 class="text-pink-500 font-bold text-lg">Notitas que se han dejado por aquí</h2>
+            </div>
+            <div class="columns-2 sm:columns-3 md:columns-4 gap-4 space-y-4">
+                {% for n in notas %}
+                <div class="nota-mini break-inside-avoid rounded-2xl p-4 border-2
+                    {% if n.genero == 'hombre' %} bg-blue-50 border-blue-200
+                    {% elif n.genero == 'mujer' %} bg-pink-50 border-pink-200
+                    {% else %} bg-gray-50 border-gray-200 {% endif %}
+                " style="transform: rotate({{ n.rotacion }}deg);">
+                    <p class="text-[11px] font-bold uppercase tracking-wide mb-1
+                        {% if n.genero == 'hombre' %} text-blue-500
+                        {% elif n.genero == 'mujer' %} text-pink-500
+                        {% else %} text-gray-500 {% endif %}
+                    ">{{ n.nombre }}</p>
+                    <p class="text-gray-700 text-sm whitespace-pre-wrap">{{ n.contenido }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <div class="w-full max-w-5xl mt-12 text-center">
+            <p class="text-sm text-gray-400">Todavía no hay notitas por aquí… ¡anímate a dejar la primera! 💭</p>
+        </div>
+        {% endif %}
     </body>
     </html>
     '''
-    return render_template_string(html_espacio, codigo_sala=session['espacio_activo'])
+    return render_template_string(html_espacio, codigo_sala=session['espacio_activo'], notas=notas)
 
 
 # === ¿QUIÉN ERES? (elección de bloque / identidad de pareja) ===
@@ -503,7 +570,7 @@ def escribir_nota():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_notas'))
+            return redirect(url_for('espacio_virtual'))
 
     html_escribir_nota = '''
     <!DOCTYPE html>
