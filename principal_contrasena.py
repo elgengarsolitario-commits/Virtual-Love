@@ -1,22 +1,30 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session
 from datetime import timedelta
-import sqlite3
+import os
+import psycopg2
 
 app = Flask(__name__)
 app.secret_key = 'tu_clave_secreta_ultra_segura'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
+
+
 # === CONFIGURACIÓN DE LA BASE DE DATOS ===
 def init_db():
-    conn = sqlite3.connect('espacios.db')
+    conn = get_conn()
     cursor = conn.cursor()
-    # Creamos la tabla para registrar los códigos de los espacios creados
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS espacios (
             codigo TEXT PRIMARY KEY
         )
     ''')
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
@@ -33,36 +41,38 @@ def home():
 
     if request.method == 'POST':
         accion = request.form.get('accion')
-        codigo = request.form.get('codigo', '').strip().lower()  # Limpiamos espacios y pasamos a minúsculas
+        codigo = request.form.get('codigo', '').strip().lower()
 
         if not codigo:
             mensaje_error = "¡Por favor, escribe un código!"
         else:
-            conn = sqlite3.connect('espacios.db')
+            conn = get_conn()
             cursor = conn.cursor()
 
             # --- CASO 1: CREAR UN NUEVO ESPACIO ---
             if accion == 'crear':
                 try:
-                    cursor.execute('INSERT INTO espacios (codigo) VALUES (?)', (codigo,))
+                    cursor.execute('INSERT INTO espacios (codigo) VALUES (%s)', (codigo,))
                     conn.commit()
                     mensaje_exito = f'¡Espacio "{codigo}" creado con éxito! Ahora puedes entrar.'
-                except sqlite3.IntegrityError:
+                except psycopg2.errors.UniqueViolation:
+                    conn.rollback()
                     mensaje_error = "Ese código de espacio ya existe. ¡Prueba con otro!"
 
             # --- CASO 2: ENTRAR A UN ESPACIO EXISTENTE ---
             elif accion == 'entrar':
-                cursor.execute('SELECT codigo FROM espacios WHERE codigo = ?', (codigo,))
+                cursor.execute('SELECT codigo FROM espacios WHERE codigo = %s', (codigo,))
                 resultado = cursor.fetchone()
                 if resultado:
-                    # Guardamos el código en la sesión permanente
                     session.permanent = True
                     session['espacio_activo'] = codigo
+                    cursor.close()
                     conn.close()
                     return redirect(url_for('espacio_virtual'))
                 else:
                     mensaje_error = "Ese espacio no existe. ¿Escribiste bien el código?"
 
+            cursor.close()
             conn.close()
 
     # === DISEÑO EN HTML (ESTILO TIERNO) ===
@@ -77,7 +87,7 @@ def home():
     </head>
     <body class="bg-pink-50 min-h-screen flex items-center justify-center font-sans p-4">
         <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-pink-100 text-center">
-            
+
             <h1 class="text-3xl font-bold text-pink-500 mb-2">🌸 ¡Bienvenido! 🌸</h1>
             <p class="text-gray-500 text-sm mb-6">Crea tu rincón privado o entra al que ya tienes con tu personita especial.</p>
 
@@ -91,7 +101,7 @@ def home():
             <form method="POST" class="space-y-6">
                 <div>
                     <label class="block text-gray-600 text-xs font-semibold uppercase tracking-wider mb-2">Ingresa tu código único</label>
-                    <input type="text" name="codigo" placeholder="ej: nuestrocodigo" 
+                    <input type="text" name="codigo" placeholder="ej: nuestrocodigo"
                            class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none text-center text-lg text-pink-600 font-medium placeholder-gray-300 transition-all">
                 </div>
 
@@ -121,7 +131,7 @@ def home():
     return render_template_string(html_bienvenida, error=mensaje_error, exito=mensaje_exito)
 
 
-# === EL ESPACIO VIRTUAL ADENTRO (hub con las 6 ventanas) ===
+# === EL ESPACIO VIRTUAL ADENTRO (hub con las 8 ventanas) ===
 @app.route('/espacio')
 def espacio_virtual():
     # Si alguien intenta entrar directamente sin loguearse, lo pateamos a la entrada
@@ -149,8 +159,9 @@ def espacio_virtual():
             }
 
             .ventana:hover {
-                transform: translateY(-6px) scale(1.04);
+                transform: translateY(-6px) scale(1.06);
                 box-shadow: 0 20px 40px -12px rgba(236, 72, 153, 0.35);
+                z-index: 10;
             }
 
             .ventana-icono {
@@ -193,12 +204,20 @@ def espacio_virtual():
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center py-12 px-4">
 
+        <div class="w-full max-w-5xl flex justify-end mb-4">
+            <a href="/salir"
+               class="text-xs text-gray-400 hover:text-red-400 hover:bg-red-50 border border-transparent hover:border-red-100 px-3 py-2 rounded-xl transition-all flex items-center gap-1">
+                <span>Cerrar sesión</span>
+                <span>🔒</span>
+            </a>
+        </div>
+
         <div class="text-center mb-10">
             <h1 class="text-3xl font-bold text-pink-600">💖 Espacio Privado: {{ codigo_sala }} 💖</h1>
             <p class="text-gray-500 mt-2">Elige una ventana para entrar</p>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl w-full">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-5xl w-full">
 
             <!-- Ventana 1: Notas -->
             <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
@@ -235,16 +254,28 @@ def espacio_virtual():
                 <p class="ventana-detalle text-sm text-gray-500 px-2">Las canciones que les recuerdan a ustedes dos.</p>
             </a>
 
-            <!-- Ventana 6: Lista de deseos -->
+            <!-- Ventana 6: Planes juntos -->
             <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
                 <span class="ventana-icono text-4xl">🎯</span>
                 <h3 class="text-lg font-bold text-pink-600 mt-3">Planes juntos</h3>
                 <p class="ventana-detalle text-sm text-gray-500 px-2">Cosas que quieren hacer, ver o visitar juntos algún día.</p>
             </a>
 
-        </div>
+            <!-- Ventana 7: Juegos -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">🎮</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Juegos</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Pequeños juegos o retos para hacer juntos cuando se conecten.</p>
+            </a>
 
-        <a href="/salir" class="text-xs text-gray-400 hover:text-red-400 underline mt-10">Cerrar sesión en este espacio</a>
+            <!-- Ventana 8: Sobre nosotros -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">💞</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Sobre nosotros</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Datos, aniversarios y cositas curiosas de su relación.</p>
+            </a>
+
+        </div>
 
     </body>
     </html>
