@@ -33,7 +33,7 @@ def home():
 
     if request.method == 'POST':
         accion = request.form.get('accion')
-        codigo = request.form.get('codigo', '').strip().lower() # Limpiamos espacios y pasamos a minúsculas
+        codigo = request.form.get('codigo', '').strip().lower()  # Limpiamos espacios y pasamos a minúsculas
 
         if not codigo:
             mensaje_error = "¡Por favor, escribe un código!"
@@ -66,7 +66,6 @@ def home():
             conn.close()
 
     # === DISEÑO EN HTML (ESTILO TIERNO) ===
-    # Usamos Tailwind CSS para darle un diseño moderno, limpio y con colores suaves
     html_bienvenida = '''
     <!DOCTYPE html>
     <html lang="es">
@@ -122,14 +121,13 @@ def home():
     return render_template_string(html_bienvenida, error=mensaje_error, exito=mensaje_exito)
 
 
-# === EL ESPACIO VIRTUAL ADENTRO ===
+# === EL ESPACIO VIRTUAL ADENTRO (hub con las 6 ventanas) ===
 @app.route('/espacio')
 def espacio_virtual():
     # Si alguien intenta entrar directamente sin loguearse, lo pateamos a la entrada
     if 'espacio_activo' not in session:
         return redirect(url_for('home'))
 
-    # Diseño básico del interior del espacio
     html_espacio = '''
     <!DOCTYPE html>
     <html lang="es">
@@ -138,18 +136,116 @@ def espacio_virtual():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Espacio: {{ codigo_sala }}</title>
         <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center font-sans p-4">
-        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full text-center border border-pink-100">
-            <h2 class="text-2xl font-bold text-pink-600">💖 Espacio Privado: {{ codigo_sala }} 💖</h2>
-            <p class="text-gray-500 mt-2">¡Felicidades, están adentro de su rincón secreto permanente!</p>
-            
-            <div class="my-8 p-6 bg-pink-50 rounded-2xl border border-dashed border-pink-200 text-gray-600">
-                <p class="italic">"Aquí es donde empezaremos a construir los besitos virtuales, las notitas románticas y los abrazos."</p>
-            </div>
+        <style>
+            body {
+                font-family: 'Segoe UI', system-ui, sans-serif;
+            }
 
-            <a href="/salir" class="text-xs text-gray-400 hover:text-red-400 underline">Cerrar sesión en este espacio</a>
+            .ventana {
+                position: relative;
+                overflow: hidden;
+                transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+                            box-shadow 0.35s ease;
+            }
+
+            .ventana:hover {
+                transform: translateY(-6px) scale(1.04);
+                box-shadow: 0 20px 40px -12px rgba(236, 72, 153, 0.35);
+            }
+
+            .ventana-icono {
+                transition: transform 0.35s ease;
+            }
+
+            .ventana:hover .ventana-icono {
+                transform: scale(1.15) rotate(-4deg);
+            }
+
+            .ventana-detalle {
+                max-height: 0;
+                opacity: 0;
+                transition: max-height 0.35s ease, opacity 0.3s ease, margin-top 0.35s ease;
+            }
+
+            .ventana:hover .ventana-detalle {
+                max-height: 100px;
+                opacity: 1;
+                margin-top: 0.5rem;
+            }
+
+            .ventana::before {
+                content: "";
+                position: absolute;
+                top: -50%;
+                left: -50%;
+                width: 200%;
+                height: 200%;
+                background: radial-gradient(circle, rgba(244, 114, 182, 0.12) 0%, transparent 60%);
+                opacity: 0;
+                transition: opacity 0.35s ease;
+                pointer-events: none;
+            }
+
+            .ventana:hover::before {
+                opacity: 1;
+            }
+        </style>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-12 px-4">
+
+        <div class="text-center mb-10">
+            <h1 class="text-3xl font-bold text-pink-600">💖 Espacio Privado: {{ codigo_sala }} 💖</h1>
+            <p class="text-gray-500 mt-2">Elige una ventana para entrar</p>
         </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl w-full">
+
+            <!-- Ventana 1: Notas -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">📝</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Notitas</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Deja mensajitos cortos para que tu personita los lea cuando entre.</p>
+            </a>
+
+            <!-- Ventana 2: Fotos -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">📸</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Fotos</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Guarden juntos las fotos que más les gustan de su historia.</p>
+            </a>
+
+            <!-- Ventana 3: Cartas -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">💌</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Cartas</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Escriban cartas más largas para ocasiones especiales.</p>
+            </a>
+
+            <!-- Ventana 4: Recuerdos -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">📅</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Recuerdos</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Una línea de tiempo con los momentos más importantes juntos.</p>
+            </a>
+
+            <!-- Ventana 5: Playlist -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">🎵</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Playlist</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Las canciones que les recuerdan a ustedes dos.</p>
+            </a>
+
+            <!-- Ventana 6: Lista de deseos -->
+            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+                <span class="ventana-icono text-4xl">🎯</span>
+                <h3 class="text-lg font-bold text-pink-600 mt-3">Planes juntos</h3>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Cosas que quieren hacer, ver o visitar juntos algún día.</p>
+            </a>
+
+        </div>
+
+        <a href="/salir" class="text-xs text-gray-400 hover:text-red-400 underline mt-10">Cerrar sesión en este espacio</a>
+
     </body>
     </html>
     '''
