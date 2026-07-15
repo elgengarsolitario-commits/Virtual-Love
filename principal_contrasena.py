@@ -5,6 +5,7 @@ import re
 import json
 import random
 import urllib.request
+import urllib.parse
 import psycopg2
 
 app = Flask(__name__)
@@ -14,6 +15,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 DATABASE_URL = os.environ.get('DATABASE_URL')
 CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
 CLOUDINARY_UPLOAD_PRESET = os.environ.get('CLOUDINARY_UPLOAD_PRESET', '')
+YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
 
 
 def get_conn():
@@ -159,6 +161,37 @@ def obtener_titulo_youtube(video_id):
             return data.get('title', 'Canción')
     except Exception:
         return 'Canción'
+
+
+def buscar_youtube(query):
+    """Busca videos en YouTube usando YouTube Data API v3 (requiere YOUTUBE_API_KEY)."""
+    if not YOUTUBE_API_KEY:
+        return []
+    try:
+        params = urllib.parse.urlencode({
+            'part': 'snippet',
+            'q': query,
+            'type': 'video',
+            'maxResults': 8,
+            'key': YOUTUBE_API_KEY
+        })
+        url = 'https://www.googleapis.com/youtube/v3/search?' + params
+        with urllib.request.urlopen(url, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        resultados = []
+        for item in data.get('items', []):
+            vid = item.get('id', {}).get('videoId')
+            snippet = item.get('snippet', {})
+            if vid:
+                resultados.append({
+                    'id': vid,
+                    'titulo': snippet.get('title', 'Canción'),
+                    'canal': snippet.get('channelTitle', ''),
+                    'thumb': snippet.get('thumbnails', {}).get('medium', {}).get('url', '')
+                })
+        return resultados
+    except Exception:
+        return []
 
 
 # === MASCOTA FLOTANTE (aparece en todas las pantallas) ===
@@ -413,7 +446,7 @@ def espacio_virtual():
             }
             .ventana:hover::before { opacity: 1; }
             .fondo-notas { position: fixed; inset: 0; overflow: hidden; z-index: 0; pointer-events: none; }
-            .nota-fondo { position: absolute; width: 170px; padding: 14px; border-radius: 16px; filter: blur(2.5px); opacity: 0.55; }
+            .nota-fondo { position: absolute; width: 170px; padding: 14px; border-radius: 16px; opacity: 0.9; box-shadow: 0 8px 20px -8px rgba(0,0,0,0.15); }
             .contenido-principal { position: relative; z-index: 10; }
         </style>
     </head>
@@ -1069,7 +1102,18 @@ def crear_carta():
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
         <div class="w-full max-w-xl"><a href="/cartas" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
-        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4">
+
+        <div class="max-w-xl w-full mt-4 mb-2">
+            <p class="text-xs text-gray-500 mb-2">💡 ¿No sabes qué escribir? Toca una idea para usarla:</p>
+            <div class="flex flex-wrap gap-2" id="plantillas-sugeridas">
+                <button type="button" data-plantilla="Hoy quiero decirte que {1} y que me haces sentir {2}. Si tuviera que describirte con una palabra sería {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">💗 Clásica romántica</button>
+                <button type="button" data-plantilla="Si furamos un dúo seríamos como {1} y {2}. Mi recuerdo favorito contigo es cuando {3}. Prometo que siempre {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">😂 Divertida</button>
+                <button type="button" data-plantilla="Lo que más admiro de ti es {1}. Cuando estamos juntos me siento {2}. Nuestro próximo plan debería ser {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">✨ Reflexiva</button>
+                <button type="button" data-plantilla="Quiero confesarte que {1}. Algo que nunca te había dicho es {2}. Y algo que quiero hacer contigo pronto es {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🤫 Confesión</button>
+            </div>
+        </div>
+
+        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-2">
             <h2 class="text-lg font-bold text-pink-600 mb-2">Crea tu carta con espacios ✍️</h2>
             <p class="text-xs text-gray-500 mb-4">
                 Escribe tu carta y usa <b>{1}</b>, <b>{2}</b>, <b>{3}</b>... donde quieras que tu pareja complete,
@@ -1080,7 +1124,7 @@ def crear_carta():
                 <div class="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 border border-red-100">{{ error }}</div>
             {% endif %}
 
-            <textarea name="plantilla" rows="6" placeholder="Escribe tu carta usando {1}, {2}, {3}..."
+            <textarea id="plantilla-textarea" name="plantilla" rows="6" placeholder="Escribe tu carta usando {1}, {2}, {3}..."
                 class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none resize-none text-gray-700 mb-4" required></textarea>
 
             <p class="text-xs text-gray-500 mb-2">Describe qué tipo de palabra va en cada espacio (opcional, ej: "un adjetivo"):</p>
@@ -1095,6 +1139,14 @@ def crear_carta():
                 Enviar carta 💌
             </button>
         </form>
+
+        <script>
+            document.querySelectorAll('.sugerencia').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    document.getElementById('plantilla-textarea').value = btn.getAttribute('data-plantilla');
+                });
+            });
+        </script>
     </body>
     </html>
     '''
@@ -1139,7 +1191,7 @@ def completar_carta(carta_id):
         conn.commit()
         cursor.close()
         conn.close()
-        return redirect(url_for('ver_cartas'))
+        return redirect(url_for('ver_cartas', revelada=carta_id))
 
     cursor.close()
     conn.close()
@@ -1183,6 +1235,7 @@ def ver_cartas():
 
     codigo = session['espacio_activo']
     identidad = mi_identidad()
+    revelada = request.args.get('revelada', type=int)
 
     conn = get_conn()
     cursor = conn.cursor()
@@ -1211,6 +1264,14 @@ def ver_cartas():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Mis cartas</title>
         <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            @keyframes cartaPop {
+                0% { transform: scale(0.85); opacity: 0; }
+                60% { transform: scale(1.03); opacity: 1; }
+                100% { transform: scale(1); }
+            }
+            .carta-revelada { animation: cartaPop 0.5s cubic-bezier(0.34,1.56,0.64,1); }
+        </style>
     </head>
     <body class="bg-pink-50 min-h-screen py-10 px-4">
         <div class="w-full max-w-3xl mx-auto flex justify-between items-center mb-8">
@@ -1225,7 +1286,7 @@ def ver_cartas():
 
         <div class="max-w-3xl mx-auto space-y-4">
             {% for c in cartas %}
-            <div class="bg-white rounded-2xl border-2 p-5 shadow-md
+            <div class="bg-white rounded-2xl border-2 p-5 shadow-md {% if c.id == revelada %} carta-revelada {% endif %}
                 {% if c.autor_genero == 'hombre' %} border-blue-200
                 {% elif c.autor_genero == 'mujer' %} border-pink-200
                 {% else %} border-gray-200 {% endif %}
@@ -1233,6 +1294,7 @@ def ver_cartas():
                 {% if c.respondida %}
                     <p class="text-xs font-bold uppercase text-gray-400 mb-2">De {{ c.autor_nombre }} · completada por {{ c.completado_por }}</p>
                     <p class="text-gray-700 whitespace-pre-wrap">{{ c.contenido_final }}</p>
+                    {% if c.id == revelada %}<p class="text-xs text-pink-400 mt-2">✨ ¡Sorpresa revelada! ✨</p>{% endif %}
                 {% elif c.es_mia %}
                     <p class="text-xs font-bold uppercase text-gray-400 mb-2">Tu carta</p>
                     <p class="text-sm text-gray-500">Esperando a que la completen... 💭</p>
@@ -1250,7 +1312,7 @@ def ver_cartas():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_cartas, cartas=cartas))
+    return con_mascota(render_template_string(html_ver_cartas, cartas=cartas, revelada=revelada))
 
 
 # === RECUERDOS (línea de tiempo) ===
@@ -1406,6 +1468,19 @@ def playlist_menu():
     ])
 
 
+@app.route('/playlist/buscar')
+def buscar_playlist():
+    """Endpoint AJAX para buscar canciones en YouTube."""
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+    query = request.args.get('q', '').strip()
+    if not query:
+        return json.dumps({'ok': False, 'resultados': [], 'sin_api_key': not bool(YOUTUBE_API_KEY)}), 200, {'Content-Type': 'application/json'}
+    resultados = buscar_youtube(query)
+    return json.dumps({'ok': True, 'resultados': resultados, 'sin_api_key': not bool(YOUTUBE_API_KEY)}), 200, {'Content-Type': 'application/json'}
+
+
 @app.route('/playlist/agregar', methods=['GET', 'POST'])
 def agregar_cancion():
     redir = requiere_espacio_e_identidad()
@@ -1417,12 +1492,17 @@ def agregar_cancion():
     mensaje_error = None
 
     if request.method == 'POST':
+        video_id = request.form.get('video_id', '').strip()
+        titulo_directo = request.form.get('titulo_directo', '').strip()
         url = request.form.get('url', '').strip()
-        video_id = extraer_youtube_id(url)
+
+        if not video_id and url:
+            video_id = extraer_youtube_id(url)
+
         if not video_id:
-            mensaje_error = "No pude reconocer ese link de YouTube. Revisa que sea correcto."
+            mensaje_error = "No pude reconocer esa canción. Búscala en la biblioteca o pega un link válido de YouTube."
         else:
-            titulo = obtener_titulo_youtube(video_id)
+            titulo = titulo_directo or obtener_titulo_youtube(video_id)
             conn = get_conn()
             cursor = conn.cursor()
             cursor.execute(
@@ -1445,21 +1525,89 @@ def agregar_cancion():
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4">
         <div class="w-full max-w-xl"><a href="/playlist" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
-        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4">
+
+        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4">
             <h2 class="text-lg font-bold text-pink-600 mb-4">Agregar una canción 🎵</h2>
             {% if error %}
                 <div class="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 border border-red-100">{{ error }}</div>
             {% endif %}
-            <input type="text" name="url" placeholder="Pega el link de YouTube" required
-                class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-4">
-            <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
-                Agregar a la playlist 🎧
-            </button>
-        </form>
+
+            {% if not tiene_api_key %}
+                <div class="bg-yellow-50 text-yellow-700 text-xs p-3 rounded-xl border border-yellow-200 mb-4">
+                    La búsqueda con biblioteca de YouTube no está activa (falta la variable <b>YOUTUBE_API_KEY</b> en el servidor).
+                    Por ahora puedes pegar el link directamente. 👇
+                </div>
+            {% else %}
+                <label class="block text-xs text-gray-500 mb-1">Buscar en YouTube</label>
+                <input type="text" id="buscador" placeholder="Escribe el nombre de la canción..."
+                    class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-2">
+                <div id="resultados" class="space-y-2 max-h-80 overflow-y-auto mb-4"></div>
+                <div class="flex items-center my-3">
+                    <div class="flex-grow border-t border-gray-200"></div>
+                    <span class="mx-3 text-xs text-gray-400">o pega un link</span>
+                    <div class="flex-grow border-t border-gray-200"></div>
+                </div>
+            {% endif %}
+
+            <form method="POST" id="form-link">
+                <input type="text" name="url" placeholder="Pega el link de YouTube"
+                    class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-4">
+                <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
+                    Agregar a la playlist 🎧
+                </button>
+            </form>
+
+            <form method="POST" id="form-elegido" class="hidden">
+                <input type="hidden" name="video_id" id="input-video-id">
+                <input type="hidden" name="titulo_directo" id="input-titulo-directo">
+            </form>
+        </div>
+
+        {% if tiene_api_key %}
+        <script>
+            var buscador = document.getElementById('buscador');
+            var resultadosDiv = document.getElementById('resultados');
+            var timeoutId = null;
+
+            buscador.addEventListener('input', function() {
+                clearTimeout(timeoutId);
+                var q = buscador.value.trim();
+                if (!q) { resultadosDiv.innerHTML = ''; return; }
+                timeoutId = setTimeout(function() {
+                    resultadosDiv.innerHTML = '<p class="text-xs text-gray-400">Buscando...</p>';
+                    fetch('/playlist/buscar?q=' + encodeURIComponent(q))
+                        .then(function(res) { return res.json(); })
+                        .then(function(data) {
+                            resultadosDiv.innerHTML = '';
+                            if (!data.resultados || data.resultados.length === 0) {
+                                resultadosDiv.innerHTML = '<p class="text-xs text-gray-400">Sin resultados.</p>';
+                                return;
+                            }
+                            data.resultados.forEach(function(r) {
+                                var item = document.createElement('div');
+                                item.className = 'flex items-center gap-3 p-2 rounded-xl border border-pink-100 hover:bg-pink-50 cursor-pointer';
+                                item.innerHTML = '<img src="' + r.thumb + '" class="w-16 h-12 object-cover rounded-lg">' +
+                                    '<div class="flex-1"><p class="text-xs font-semibold text-gray-700 line-clamp-2">' + r.titulo + '</p>' +
+                                    '<p class="text-[10px] text-gray-400">' + r.canal + '</p></div>';
+                                item.addEventListener('click', function() {
+                                    document.getElementById('input-video-id').value = r.id;
+                                    document.getElementById('input-titulo-directo').value = r.titulo;
+                                    document.getElementById('form-elegido').submit();
+                                });
+                                resultadosDiv.appendChild(item);
+                            });
+                        })
+                        .catch(function() {
+                            resultadosDiv.innerHTML = '<p class="text-xs text-red-400">Error al buscar.</p>';
+                        });
+                }, 400);
+            });
+        </script>
+        {% endif %}
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_agregar, error=mensaje_error))
+    return con_mascota(render_template_string(html_agregar, error=mensaje_error, tiene_api_key=bool(YOUTUBE_API_KEY)))
 
 
 @app.route('/playlist/ver')
@@ -1479,7 +1627,8 @@ def ver_playlist():
     cursor.close()
     conn.close()
 
-    canciones = [{'nombre': n, 'genero': g, 'youtube_id': yid, 'titulo': t} for n, g, yid, t, _ in filas]
+    canciones = [{'nombre': n, 'genero': g, 'youtube_id': yid, 'titulo': t,
+                  'fecha': f.strftime('%d/%m/%Y') if f else ''} for n, g, yid, t, f in filas]
 
     html_ver_playlist = '''
     <!DOCTYPE html>
@@ -1513,7 +1662,7 @@ def ver_playlist():
                 </div>
                 <div class="p-3">
                     <p class="font-bold text-gray-700 text-sm">{{ c.titulo }}</p>
-                    <p class="text-xs text-gray-400 mt-1">Agregada por {{ c.nombre }}</p>
+                    <p class="text-xs text-gray-400 mt-1">Agregada por {{ c.nombre }} · {{ c.fecha }}</p>
                 </div>
             </div>
             {% endfor %}
@@ -1525,6 +1674,18 @@ def ver_playlist():
 
 
 # === PLANES JUNTOS ===
+PLANES_SUGERIDOS = [
+    {'titulo': 'Ir a la playa juntos', 'descripcion': 'Un día de sol, arena y buenas vibras.', 'emoji': '🏖️'},
+    {'titulo': 'Maratón de películas', 'descripcion': 'Snacks, cobijas y sus pelis favoritas.', 'emoji': '🎬'},
+    {'titulo': 'Cita de cocina', 'descripcion': 'Cocinar juntos una receta nueva.', 'emoji': '🍳'},
+    {'titulo': 'Viaje de fin de semana', 'descripcion': 'Escaparse a un lugar nuevo, aunque sea cerca.', 'emoji': '🧳'},
+    {'titulo': 'Noche de juegos de mesa', 'descripcion': 'Competir sanamente por el título de campeón/a.', 'emoji': '🎲'},
+    {'titulo': 'Picnic al aire libre', 'descripcion': 'Una manta, comida rica y buena compañía.', 'emoji': '🧺'},
+    {'titulo': 'Concierto o evento en vivo', 'descripcion': 'Ver a un artista que les guste a los dos.', 'emoji': '🎤'},
+    {'titulo': 'Sesión de fotos juntos', 'descripcion': 'Capturar el momento para el recuerdo.', 'emoji': '📷'},
+]
+
+
 @app.route('/planes')
 def planes_menu():
     redir = requiere_espacio_e_identidad()
@@ -1570,18 +1731,32 @@ def agregar_plan():
         <title>Agregar plan</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
-    <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4">
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
         <div class="w-full max-w-xl"><a href="/planes" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
-        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4 space-y-4">
+
+        <div class="max-w-xl w-full mt-4 mb-2">
+            <p class="text-xs text-gray-500 mb-2">💡 Ideas rápidas, toca una para usarla:</p>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2" id="sugerencias-planes">
+                {% for s in sugerencias %}
+                <button type="button" data-titulo="{{ s.titulo }}" data-descripcion="{{ s.descripcion }}"
+                    class="sugerencia-plan bg-white border border-pink-200 rounded-xl p-3 text-center hover:bg-pink-100 transition-all">
+                    <span class="text-2xl block">{{ s.emoji }}</span>
+                    <span class="text-[10px] text-pink-600 font-semibold">{{ s.titulo }}</span>
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+
+        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-2 space-y-4">
             <h2 class="text-lg font-bold text-pink-600">Agregar un plan 🎯</h2>
             <div>
                 <label class="block text-xs text-gray-500 mb-1">Título</label>
-                <input type="text" name="titulo" required placeholder="Ej: Ir a la playa"
+                <input id="input-titulo" type="text" name="titulo" required placeholder="Ej: Ir a la playa"
                     class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none">
             </div>
             <div>
                 <label class="block text-xs text-gray-500 mb-1">Descripción</label>
-                <textarea name="descripcion" rows="3"
+                <textarea id="input-descripcion" name="descripcion" rows="3"
                     class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none resize-none"></textarea>
             </div>
             <div>
@@ -1593,10 +1768,19 @@ def agregar_plan():
                 Guardar plan 💗
             </button>
         </form>
+
+        <script>
+            document.querySelectorAll('.sugerencia-plan').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    document.getElementById('input-titulo').value = btn.getAttribute('data-titulo');
+                    document.getElementById('input-descripcion').value = btn.getAttribute('data-descripcion');
+                });
+            });
+        </script>
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_agregar))
+    return con_mascota(render_template_string(html_agregar, sugerencias=PLANES_SUGERIDOS))
 
 
 @app.route('/planes/ver')
