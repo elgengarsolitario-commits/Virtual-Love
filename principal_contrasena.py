@@ -100,11 +100,79 @@ def init_db():
         estado TEXT DEFAULT 'pendiente',
         creado_en TIMESTAMP DEFAULT NOW()
     )''')
+    cursor.execute('''ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultima_actividad TIMESTAMP DEFAULT NOW()''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS trivia_juegos (
+        id SERIAL PRIMARY KEY,
+        espacio TEXT NOT NULL,
+        autor_slot INTEGER NOT NULL,
+        preguntas TEXT NOT NULL,
+        adivinador_slot INTEGER,
+        respuestas_adivinador TEXT,
+        puntaje INTEGER,
+        estado TEXT DEFAULT 'esperando_adivinanza',
+        creado_en TIMESTAMP DEFAULT NOW()
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS ahorcado_juegos (
+        id SERIAL PRIMARY KEY,
+        espacio TEXT NOT NULL,
+        autor_slot INTEGER NOT NULL,
+        palabra TEXT NOT NULL,
+        pista TEXT,
+        letras_probadas TEXT DEFAULT '',
+        vidas INTEGER DEFAULT 6,
+        estado TEXT DEFAULT 'jugando',
+        creado_en TIMESTAMP DEFAULT NOW()
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS penales_marcador (
+        espacio TEXT NOT NULL,
+        slot INTEGER NOT NULL,
+        goles INTEGER DEFAULT 0,
+        tiros INTEGER DEFAULT 0,
+        PRIMARY KEY (espacio, slot)
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS notificaciones (
+        id SERIAL PRIMARY KEY,
+        espacio TEXT NOT NULL,
+        para_slot INTEGER NOT NULL,
+        de_nombre TEXT,
+        tipo TEXT NOT NULL,
+        mensaje TEXT NOT NULL,
+        emoji TEXT DEFAULT '💗',
+        url TEXT DEFAULT '/espacio',
+        leida BOOLEAN DEFAULT FALSE,
+        creado_en TIMESTAMP DEFAULT NOW()
+    )''')
     conn.commit()
     cursor.close()
     conn.close()
 
 init_db()
+
+
+# === MENSAJES ALEATORIOS DE LA MASCOTA ===
+MENSAJES_IDLE = [
+    "¿Ya le dijiste algo bonito hoy? 🐻💗", "Recuerda tomar agua 💧", "¡Estoy aquí acompañándote! 🐾",
+    "Un mensajito nunca sobra ✨", "¿Y si dejas una notita sorpresa? 📝", "Hoy es un buen día para sonreír 🌸",
+    "Psst... revisa la playlist, hay canciones nuevas 🎵", "¿Ya vieron sus planes juntos? 🎯",
+]
+
+MENSAJES_EVENTOS = {
+    'nota': ["¡Qué bonito mensaje dejaste! 💌", "Awww, se van a poner feliz con esto 🥰", "Eso sí que alegra el día 🌸"],
+    'foto': ["¡Qué recuerdo tan lindo! 📸", "Esa foto quedó preciosa 💕", "Un momento más guardado para siempre 🖼️"],
+    'carta': ["¡Carta enviada! Qué sorpresa se van a llevar 💌", "Esto va a ser divertido de completar ✨"],
+    'carta_completada': ["¡Sorpresa revelada! 🎉", "Jaja, qué carta tan graciosa quedó 😂", "Esto hay que guardarlo para siempre 💗"],
+    'recuerdo': ["Un recuerdo más en su historia 📅", "Qué bonito momento para no olvidar 🕰️"],
+    'cancion': ["¡Buena elección de canción! 🎶", "Esa se va a quedar sonando en la cabeza 🎧"],
+    'plan': ["¡Qué ganas de que cumplan ese plan! 🎯", "Se ve divertido, ojalá lo hagan pronto ✨"],
+    'plan_cumplido': ["¡Lo lograron! 🎉🎉", "Un plan más cumplido juntos 💗"],
+}
+
+
+def mensaje_evento(clave):
+    opciones = MENSAJES_EVENTOS.get(clave)
+    if not opciones:
+        return None
+    return random.choice(opciones)
 
 
 # === HELPERS DE IDENTIDAD ===
@@ -140,6 +208,53 @@ def requiere_espacio_e_identidad():
     if 'mi_slot' not in session:
         return redirect(url_for('quien_eres'))
     return None
+
+
+SEGUNDOS_EN_LINEA = 45
+
+
+def marcar_actividad(codigo, slot):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE usuarios SET ultima_actividad = NOW() WHERE espacio = %s AND slot = %s', (codigo, slot))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def estado_en_linea(codigo):
+    """Devuelve {slot: True/False} según actividad reciente de cada usuario."""
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT slot, (NOW() - ultima_actividad) < INTERVAL '%s seconds' FROM usuarios WHERE espacio = %%s" % SEGUNDOS_EN_LINEA,
+        (codigo,)
+    )
+    filas = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return {slot: en_linea for slot, en_linea in filas}
+
+
+def ambos_en_linea(codigo):
+    estados = estado_en_linea(codigo)
+    return len(estados) == 2 and all(estados.values())
+
+
+def otro_slot(slot):
+    return 2 if slot == 1 else 1
+
+
+def crear_notificacion(codigo, para_slot, de_nombre, tipo, mensaje, emoji='💗', url='/espacio'):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO notificaciones (espacio, para_slot, de_nombre, tipo, mensaje, emoji, url) VALUES (%s, %s, %s, %s, %s, %s, %s)',
+        (codigo, para_slot, de_nombre, tipo, mensaje, emoji, url)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 def extraer_youtube_id(url):
@@ -198,7 +313,37 @@ def buscar_youtube(query):
 MASCOTA_HTML = '''
 <div id="mascota-flotante" style="position:fixed; z-index:9999; cursor:grab; user-select:none; touch-action:none; font-size:46px; line-height:1; filter: drop-shadow(0 6px 10px rgba(0,0,0,0.25));">
     <div style="position:relative;">
-        <span id="mascota-emoji">🐻</span>
+        <div id="mascota-burbuja" style="position:absolute; bottom:110%; right:0; min-width:140px; max-width:220px; background:#fff; border-radius:16px; border:2px solid #fbcfe8; padding:10px 12px; font-size:13px; font-family:'Segoe UI', system-ui, sans-serif; color:#db2777; font-weight:600; box-shadow:0 8px 20px rgba(0,0,0,0.15); display:none; opacity:0; transition:opacity 0.35s ease; text-align:left; line-height:1.3;"></div>
+
+        <div id="mascota-menu" style="position:absolute; bottom:110%; right:0; width:230px; background:#fff; border-radius:20px; border:2px solid #fbcfe8; padding:14px; box-shadow:0 14px 30px rgba(0,0,0,0.2); display:none; font-family:'Segoe UI', system-ui, sans-serif; text-align:left;">
+            <p style="font-size:11px; color:#9ca3af; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 8px 2px;">Mandar cariño</p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+                <button type="button" class="mascota-opcion" data-tipo="besito" style="background:#fdf2f8; border:1px solid #fbcfe8; border-radius:12px; padding:8px 4px; font-size:12px; color:#db2777; font-weight:600; cursor:pointer;">💋 Besito</button>
+                <button type="button" class="mascota-opcion" data-tipo="abrazo" style="background:#fdf2f8; border:1px solid #fbcfe8; border-radius:12px; padding:8px 4px; font-size:12px; color:#db2777; font-weight:600; cursor:pointer;">🤗 Abrazo</button>
+                <button type="button" class="mascota-opcion" data-tipo="cariño" style="background:#fdf2f8; border:1px solid #fbcfe8; border-radius:12px; padding:8px 4px; font-size:12px; color:#db2777; font-weight:600; cursor:pointer;">🥰 Cariño</button>
+                <button type="button" class="mascota-opcion" data-tipo="te_extraño" style="background:#fdf2f8; border:1px solid #fbcfe8; border-radius:12px; padding:8px 4px; font-size:12px; color:#db2777; font-weight:600; cursor:pointer;">🥺 Te extraño</button>
+                <button type="button" class="mascota-opcion" data-tipo="te_amo" style="background:#fdf2f8; border:1px solid #fbcfe8; border-radius:12px; padding:8px 4px; font-size:12px; color:#db2777; font-weight:600; cursor:pointer; grid-column: span 2;">❤️ Te amo</button>
+            </div>
+            <p style="font-size:11px; color:#9ca3af; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px 2px;">O elige un emoji</p>
+            <div id="mascota-emojis" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; font-size:20px;">
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">😘</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">🥳</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">😍</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">🌹</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">✨</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">🐻</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">😂</span>
+                <span class="mascota-emoji-opcion" style="cursor:pointer;">🍫</span>
+            </div>
+            <div style="border-top:1px solid #f3f4f6; padding-top:8px;">
+                <p id="mascota-notif-titulo" style="font-size:11px; color:#9ca3af; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px 2px;">Notificaciones</p>
+                <div id="mascota-notif-lista" style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:4px;">
+                    <p style="font-size:11px; color:#d1d5db; margin:0;">Sin novedades por ahora</p>
+                </div>
+            </div>
+        </div>
+
+        <span id="mascota-emoji" style="position:relative; display:inline-block;">🐻<span id="mascota-badge" style="position:absolute; top:-6px; left:-6px; background:#ef4444; color:#fff; font-size:11px; font-weight:700; min-width:18px; height:18px; border-radius:9999px; display:none; align-items:center; justify-content:center; padding:0 4px; font-family:'Segoe UI', system-ui, sans-serif; box-shadow:0 2px 6px rgba(0,0,0,0.25);">0</span></span>
         <span id="mascota-cerrar" style="position:absolute; top:-8px; right:-10px; background:#fff; border-radius:9999px; width:20px; height:20px; font-size:12px; display:none; align-items:center; justify-content:center; box-shadow:0 2px 6px rgba(0,0,0,0.25); cursor:pointer; color:#999;">✕</span>
     </div>
 </div>
@@ -208,6 +353,11 @@ MASCOTA_HTML = '''
     var mascota = document.getElementById('mascota-flotante');
     var cerrar = document.getElementById('mascota-cerrar');
     var tab = document.getElementById('mascota-tab');
+    var burbuja = document.getElementById('mascota-burbuja');
+    var menu = document.getElementById('mascota-menu');
+    var emojiSpan = document.getElementById('mascota-emoji');
+    var badge = document.getElementById('mascota-badge');
+    var notifLista = document.getElementById('mascota-notif-lista');
     var oculta = localStorage.getItem('mascotaOculta');
 
     if (oculta === '1') {
@@ -276,20 +426,240 @@ MASCOTA_HTML = '''
         localStorage.setItem('mascotaPos', JSON.stringify({left: rect.left, top: rect.top}));
     }
 
-    mascota.addEventListener('mousedown', function(e){ startDrag(e.clientX, e.clientY); });
+    mascota.addEventListener('mousedown', function(e){ if (e.target === emojiSpan) startDrag(e.clientX, e.clientY); });
     window.addEventListener('mousemove', function(e){ moveDrag(e.clientX, e.clientY); });
     window.addEventListener('mouseup', endDrag);
 
-    mascota.addEventListener('touchstart', function(e){ var t = e.touches[0]; startDrag(t.clientX, t.clientY); }, {passive:true});
-    window.addEventListener('touchmove', function(e){ var t = e.touches[0]; moveDrag(t.clientX, t.clientY); }, {passive:true});
+    mascota.addEventListener('touchstart', function(e){ if (e.target === emojiSpan) { var t = e.touches[0]; startDrag(t.clientX, t.clientY); } }, {passive:true});
+    window.addEventListener('touchmove', function(e){ moveDrag(e.touches[0].clientX, e.touches[0].clientY); }, {passive:true});
     window.addEventListener('touchend', endDrag);
+
+    // === Menú de opciones (clic sin arrastrar abre el menú) ===
+    emojiSpan.addEventListener('click', function(e){
+        e.stopPropagation();
+        if (movio) { movio = false; return; }
+        var abierto = menu.style.display === 'block';
+        menu.style.display = abierto ? 'none' : 'block';
+        burbuja.style.display = 'none';
+        if (!abierto) { cargarNotificaciones(true); }
+    });
+    document.addEventListener('click', function(e){
+        if (menu.style.display === 'block' && !menu.contains(e.target) && e.target !== emojiSpan) {
+            menu.style.display = 'none';
+        }
+    });
+
+    document.querySelectorAll('.mascota-opcion').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+            e.stopPropagation();
+            enviarMimo(btn.getAttribute('data-tipo'), null);
+            menu.style.display = 'none';
+            mostrarBurbuja('¡Enviado! 💗', 2500);
+        });
+    });
+    document.querySelectorAll('.mascota-emoji-opcion').forEach(function(span){
+        span.addEventListener('click', function(e){
+            e.stopPropagation();
+            enviarMimo('emoji', span.textContent);
+            menu.style.display = 'none';
+            mostrarBurbuja('¡Enviado! ' + span.textContent, 2500);
+        });
+    });
+
+    function enviarMimo(tipo, emoji) {
+        var body = new URLSearchParams();
+        body.append('tipo', tipo);
+        if (emoji) body.append('emoji', emoji);
+        fetch('/mimo/enviar', {method: 'POST', body: body}).catch(function(){});
+    }
+
+    // === Burbuja de mensajes ===
+    var MENSAJES_IDLE = ["¿Ya le dijiste algo bonito hoy? 🐻💗", "Recuerda tomar agua 💧", "¡Estoy aquí acompañándote! 🐾", "Un mensajito nunca sobra ✨", "¿Y si dejas una notita sorpresa? 📝", "Hoy es un buen día para sonreír 🌸", "Psst... revisa la playlist, hay canciones nuevas 🎵", "¿Ya vieron sus planes juntos? 🎯", "Tócame para mandar cariño 💗"];
+    var mostrandoBurbuja = false;
+
+    function mostrarBurbuja(texto, duracionMs) {
+        if (mascota.style.display === 'none') return;
+        burbuja.textContent = texto;
+        burbuja.style.display = 'block';
+        requestAnimationFrame(function(){ burbuja.style.opacity = '1'; });
+        mostrandoBurbuja = true;
+        setTimeout(function(){
+            burbuja.style.opacity = '0';
+            setTimeout(function(){ burbuja.style.display = 'none'; mostrandoBurbuja = false; }, 350);
+        }, duracionMs || 4500);
+    }
+
+    var mensajeEvento = window.__mascotaMensajeEvento;
+    if (mensajeEvento) {
+        setTimeout(function(){ mostrarBurbuja(mensajeEvento, 5500); }, 500);
+    }
+
+    function ciclarIdle() {
+        var espera = 45000 + Math.random() * 45000;
+        setTimeout(function(){
+            if (!mostrandoBurbuja && menu.style.display !== 'block') {
+                var msg = MENSAJES_IDLE[Math.floor(Math.random() * MENSAJES_IDLE.length)];
+                mostrarBurbuja(msg, 4500);
+            }
+            ciclarIdle();
+        }, espera);
+    }
+    ciclarIdle();
+
+    // === Notificaciones ===
+    var ultimasNoLeidas = 0;
+
+    function cargarNotificaciones(marcarLeidas) {
+        fetch('/notificaciones/listar')
+            .then(function(res){ return res.json(); })
+            .then(function(data){
+                if (data.no_leidas > ultimasNoLeidas && !marcarLeidas) {
+                    var nuevo = data.items[0];
+                    if (nuevo) { mostrarBurbuja((nuevo.de_nombre ? nuevo.de_nombre + ': ' : '') + nuevo.mensaje.replace(/^.*?te /, 'Te ') + ' ' + nuevo.emoji, 6000); }
+                }
+                ultimasNoLeidas = data.no_leidas;
+                if (data.no_leidas > 0) {
+                    badge.style.display = 'flex';
+                    badge.textContent = data.no_leidas > 9 ? '9+' : data.no_leidas;
+                } else {
+                    badge.style.display = 'none';
+                }
+                notifLista.innerHTML = '';
+                if (!data.items || data.items.length === 0) {
+                    notifLista.innerHTML = '<p style="font-size:11px;color:#d1d5db;margin:0;">Sin novedades por ahora</p>';
+                } else {
+                    data.items.forEach(function(it){
+                        var div = document.createElement('a');
+                        div.href = it.url;
+                        div.style.cssText = 'display:block; text-decoration:none; font-size:11px; color:#374151; background:' + (it.leida ? '#fafafa' : '#fdf2f8') + '; border-radius:10px; padding:6px 8px; line-height:1.3;';
+                        div.innerHTML = '<span style="margin-right:4px;">' + it.emoji + '</span>' + it.mensaje + '<br><span style="color:#d1d5db; font-size:10px;">' + it.fecha + '</span>';
+                        notifLista.appendChild(div);
+                    });
+                }
+                if (marcarLeidas && data.no_leidas > 0) {
+                    fetch('/notificaciones/marcar-leidas', {method: 'POST'}).then(function(){
+                        badge.style.display = 'none';
+                        ultimasNoLeidas = 0;
+                    }).catch(function(){});
+                }
+            })
+            .catch(function(){});
+    }
+    cargarNotificaciones(false);
+    setInterval(function(){ cargarNotificaciones(false); }, 15000);
+
+    // === Ping de presencia (para saber si ambos están en línea) ===
+    function ping() {
+        fetch('/presencia/ping', {method: 'POST'}).catch(function(){});
+    }
+    ping();
+    setInterval(ping, 20000);
 })();
 </script>
 '''
 
 
-def con_mascota(html_renderizado):
-    return html_renderizado.replace('</body>', MASCOTA_HTML + '</body>')
+def con_mascota(html_renderizado, mensaje_evento=None):
+    mascota = MASCOTA_HTML
+    if mensaje_evento:
+        mensaje_js = json.dumps(mensaje_evento)
+        mascota = mascota.replace(
+            '<script>\n(function(){',
+            '<script>\nwindow.__mascotaMensajeEvento = ' + mensaje_js + ';\n(function(){'
+        )
+    return html_renderizado.replace('</body>', mascota + '</body>')
+
+
+# === PRESENCIA (para saber si ambos están conectados) ===
+@app.route('/presencia/ping', methods=['POST'])
+def presencia_ping():
+    if 'espacio_activo' in session and 'mi_slot' in session:
+        marcar_actividad(session['espacio_activo'], session['mi_slot'])
+    return ('', 204)
+
+
+MIMOS_TEXTO = {
+    'besito': ('te mandó un besito', '💋'),
+    'abrazo': ('te mandó un abrazo', '🤗'),
+    'cariño': ('te mandó cariño', '🥰'),
+    'te_extraño': ('te dice que te extraña', '🥺'),
+    'te_amo': ('te dice que te ama', '❤️'),
+}
+
+
+@app.route('/mimo/enviar', methods=['POST'])
+def enviar_mimo():
+    if 'espacio_activo' not in session or 'mi_slot' not in session:
+        return json.dumps({'ok': False}), 401, {'Content-Type': 'application/json'}
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+    if not identidad:
+        return json.dumps({'ok': False}), 401, {'Content-Type': 'application/json'}
+
+    tipo = request.form.get('tipo', '').strip()
+    emoji_personalizado = request.form.get('emoji', '').strip()
+
+    if tipo == 'emoji' and emoji_personalizado:
+        texto = identidad['nombre'] + ' te mandó ' + emoji_personalizado
+        emoji = emoji_personalizado
+    elif tipo in MIMOS_TEXTO:
+        frase, emoji = MIMOS_TEXTO[tipo]
+        texto = identidad['nombre'] + ' ' + frase
+    else:
+        return json.dumps({'ok': False}), 400, {'Content-Type': 'application/json'}
+
+    crear_notificacion(codigo, otro_slot(identidad['slot']), identidad['nombre'], 'mimo', texto, emoji=emoji, url='/espacio')
+    return json.dumps({'ok': True}), 200, {'Content-Type': 'application/json'}
+
+
+@app.route('/notificaciones/listar')
+def listar_notificaciones():
+    if 'espacio_activo' not in session or 'mi_slot' not in session:
+        return json.dumps({'no_leidas': 0, 'items': []}), 200, {'Content-Type': 'application/json'}
+
+    codigo = session['espacio_activo']
+    slot = session['mi_slot']
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, de_nombre, tipo, mensaje, emoji, url, leida, creado_en FROM notificaciones '
+        'WHERE espacio = %s AND para_slot = %s ORDER BY creado_en DESC LIMIT 15',
+        (codigo, slot)
+    )
+    filas = cursor.fetchall()
+    cursor.execute(
+        'SELECT COUNT(*) FROM notificaciones WHERE espacio = %s AND para_slot = %s AND leida = FALSE',
+        (codigo, slot)
+    )
+    no_leidas = cursor.fetchone()[0]
+    cursor.close()
+    conn.close()
+
+    items = [{
+        'id': i, 'de_nombre': n, 'tipo': t, 'mensaje': m, 'emoji': e, 'url': u, 'leida': l,
+        'fecha': f.strftime('%d/%m %H:%M') if f else ''
+    } for i, n, t, m, e, u, l, f in filas]
+
+    return json.dumps({'no_leidas': no_leidas, 'items': items}), 200, {'Content-Type': 'application/json'}
+
+
+@app.route('/notificaciones/marcar-leidas', methods=['POST'])
+def marcar_notificaciones_leidas():
+    if 'espacio_activo' not in session or 'mi_slot' not in session:
+        return ('', 204)
+    codigo = session['espacio_activo']
+    slot = session['mi_slot']
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE notificaciones SET leida = TRUE WHERE espacio = %s AND para_slot = %s AND leida = FALSE',
+        (codigo, slot)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return ('', 204)
 
 
 # === RUTA PRINCIPAL (EL PANEL DE BIENVENIDA) ===
@@ -517,10 +887,10 @@ def espacio_virtual():
                 <p class="ventana-detalle text-sm text-gray-500 px-2">Cosas que quieren hacer, ver o visitar juntos algún día.</p>
             </a>
 
-            <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
+            <a href="/juegos" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
                 <span class="ventana-icono text-4xl">🎮</span>
                 <h3 class="text-lg font-bold text-pink-600 mt-3">Juegos</h3>
-                <p class="ventana-detalle text-sm text-gray-500 px-2">Pequeños juegos o retos para hacer juntos cuando se conecten.</p>
+                <p class="ventana-detalle text-sm text-gray-500 px-2">Mini juegos para hacer juntos cuando ambos estén conectados.</p>
             </a>
 
             <a href="#" class="ventana bg-white rounded-3xl border border-pink-100 p-6 shadow-md flex flex-col items-center text-center cursor-pointer">
@@ -541,7 +911,8 @@ def espacio_virtual():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_espacio, codigo_sala=codigo, notas=notas))
+    return con_mascota(render_template_string(html_espacio, codigo_sala=codigo, notas=notas),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 # === ¿QUIÉN ERES? ===
@@ -786,7 +1157,11 @@ def escribir_nota():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('espacio_virtual'))
+            crear_notificacion(
+                codigo, otro_slot(identidad['slot']), identidad['nombre'], 'nota',
+                identidad['nombre'] + ' te dejó una notita nueva', emoji='📝', url='/notas/ver'
+            )
+            return redirect(url_for('espacio_virtual', evento='nota'))
 
     html_escribir_nota = '''
     <!DOCTYPE html>
@@ -919,7 +1294,11 @@ def subir_foto():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_fotos'))
+            crear_notificacion(
+                codigo, otro_slot(identidad['slot']), identidad['nombre'], 'foto',
+                identidad['nombre'] + ' subió una foto nueva', emoji='📸', url='/fotos/ver'
+            )
+            return redirect(url_for('ver_fotos', evento='foto'))
 
     html_subir = '''
     <!DOCTYPE html>
@@ -946,9 +1325,18 @@ def subir_foto():
                     <b>CLOUDINARY_CLOUD_NAME</b> y <b>CLOUDINARY_UPLOAD_PRESET</b> en Render.
                 </div>
             {% else %}
-                <input type="file" id="input-foto" accept="image/*" class="w-full mb-4 text-sm">
+                <div class="flex gap-2 mb-4">
+                    <label for="input-camara" class="flex-1 cursor-pointer bg-pink-50 hover:bg-pink-100 border-2 border-pink-200 text-pink-600 font-semibold text-sm py-3 rounded-2xl text-center transition-all">
+                        📷 Tomar foto
+                    </label>
+                    <label for="input-galeria" class="flex-1 cursor-pointer bg-white hover:bg-pink-50 border-2 border-pink-100 text-pink-600 font-semibold text-sm py-3 rounded-2xl text-center transition-all">
+                        🖼️ Elegir de galería
+                    </label>
+                </div>
+                <input type="file" id="input-camara" accept="image/*" capture="environment" class="hidden">
+                <input type="file" id="input-galeria" accept="image/*" class="hidden">
                 <div id="preview-foto" class="mb-4"></div>
-                <button id="btn-subir" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
+                <button id="btn-subir" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]" disabled style="opacity:0.5;">
                     Subir foto 💗
                 </button>
                 <p id="estado-subida" class="text-xs text-gray-400 mt-3"></p>
@@ -957,27 +1345,33 @@ def subir_foto():
                     <input type="hidden" name="url" id="input-url">
                 </form>
 
-                <script>
-                    var cloudName = "{{ cloud_name }}";
+                <script>                    var cloudName = "{{ cloud_name }}";
                     var uploadPreset = "{{ upload_preset }}";
-                    var inputFoto = document.getElementById('input-foto');
+                    var inputCamara = document.getElementById('input-camara');
+                    var inputGaleria = document.getElementById('input-galeria');
                     var preview = document.getElementById('preview-foto');
                     var btn = document.getElementById('btn-subir');
                     var estado = document.getElementById('estado-subida');
+                    var archivoElegido = null;
 
-                    inputFoto.addEventListener('change', function() {
+                    function archivoSeleccionado(file) {
+                        archivoElegido = file;
                         preview.innerHTML = '';
-                        var file = inputFoto.files[0];
                         if (file) {
                             var img = document.createElement('img');
                             img.src = URL.createObjectURL(file);
                             img.className = 'rounded-2xl max-h-56 mx-auto';
                             preview.appendChild(img);
+                            btn.disabled = false;
+                            btn.style.opacity = '1';
                         }
-                    });
+                    }
+
+                    inputCamara.addEventListener('change', function() { archivoSeleccionado(inputCamara.files[0]); });
+                    inputGaleria.addEventListener('change', function() { archivoSeleccionado(inputGaleria.files[0]); });
 
                     btn.addEventListener('click', function() {
-                        var file = inputFoto.files[0];
+                        var file = archivoElegido;
                         if (!file) { estado.textContent = 'Elige una foto primero.'; return; }
                         estado.textContent = 'Subiendo...';
                         btn.disabled = true;
@@ -1077,7 +1471,8 @@ def ver_fotos():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_fotos, fotos=fotos))
+    return con_mascota(render_template_string(html_ver_fotos, fotos=fotos),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 # === CARTAS (juego de completar frases) ===
@@ -1088,8 +1483,73 @@ def cartas_menu():
         return redir
     return pagina_menu('Cartas', '💌', [
         {'url': '/cartas/crear', 'emoji': '✍️', 'texto': 'Crear una carta con espacios'},
+        {'url': '/cartas/libre', 'emoji': '📜', 'texto': 'Escribir una carta libre'},
         {'url': '/cartas/ver', 'emoji': '📖', 'texto': 'Ver mis cartas'},
     ])
+
+
+@app.route('/cartas/libre', methods=['GET', 'POST'])
+def carta_libre():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+    mensaje_error = None
+
+    if request.method == 'POST':
+        contenido = request.form.get('contenido', '').strip()
+        if not contenido:
+            mensaje_error = "Escribe algo antes de enviar tu carta."
+        else:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO cartas (espacio, autor_slot, autor_nombre, autor_genero, plantilla, etiquetas, '
+                'respondida, contenido_final, completado_por) VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s)',
+                (codigo, identidad['slot'], identidad['nombre'], identidad['genero'], contenido, '[]',
+                 contenido, identidad['nombre'])
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+            crear_notificacion(
+                codigo, otro_slot(identidad['slot']), identidad['nombre'], 'carta',
+                identidad['nombre'] + ' te escribió una carta 💌', emoji='📜', url='/cartas/ver'
+            )
+            return redirect(url_for('ver_cartas', evento='carta'))
+
+    html_libre = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Carta libre</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4">
+        <div class="w-full max-w-xl"><a href="/cartas" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
+        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4">
+            <h2 class="text-lg font-bold text-pink-600 mb-1">Escribe una carta libre 📜</h2>
+            <p class="text-xs text-gray-500 mb-4">Sin juego de espacios, solo tú y tus palabras. Se enviará directo, sin sorpresas que completar.</p>
+
+            {% if error %}
+                <div class="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 border border-red-100">{{ error }}</div>
+            {% endif %}
+
+            <textarea name="contenido" rows="10" placeholder="Escribe todo lo que quieras decirle..."
+                class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none resize-none text-gray-700" required></textarea>
+
+            <button type="submit" class="mt-4 w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
+                Enviar carta 💌
+            </button>
+        </form>
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(html_libre, error=mensaje_error))
 
 
 @app.route('/cartas/crear', methods=['GET', 'POST'])
@@ -1123,7 +1583,11 @@ def crear_carta():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_cartas'))
+            crear_notificacion(
+                codigo, otro_slot(identidad['slot']), identidad['nombre'], 'carta',
+                identidad['nombre'] + ' te dejó una carta para completar', emoji='💌', url='/cartas/ver'
+            )
+            return redirect(url_for('ver_cartas', evento='carta'))
 
     html_crear = '''
     <!DOCTYPE html>
@@ -1140,10 +1604,15 @@ def crear_carta():
         <div class="max-w-xl w-full mt-4 mb-2">
             <p class="text-xs text-gray-500 mb-2">💡 ¿No sabes qué escribir? Toca una idea para usarla:</p>
             <div class="flex flex-wrap gap-2" id="plantillas-sugeridas">
-                <button type="button" data-plantilla="Hoy quiero decirte que {1} y que me haces sentir {2}. Si tuviera que describirte con una palabra sería {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">💗 Clásica romántica</button>
-                <button type="button" data-plantilla="Si furamos un dúo seríamos como {1} y {2}. Mi recuerdo favorito contigo es cuando {3}. Prometo que siempre {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">😂 Divertida</button>
-                <button type="button" data-plantilla="Lo que más admiro de ti es {1}. Cuando estamos juntos me siento {2}. Nuestro próximo plan debería ser {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">✨ Reflexiva</button>
+                <button type="button" data-plantilla="Hoy quiero decirte que {1} y que me haces sentir {2}. Si tuviera que describirte con una palabra sería {3}. Y si pudiera regalarte algo ahora mismo sería {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">💗 Clásica romántica</button>
+                <button type="button" data-plantilla="Si furamos un dúo seríamos como {1} y {2}. Mi recuerdo favorito contigo es cuando {3}. Prometo que siempre {4}. Y cuando estamos juntos lo que más me hace reír es {5}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">😂 Divertida</button>
+                <button type="button" data-plantilla="Lo que más admiro de ti es {1}. Cuando estamos juntos me siento {2}. Nuestro próximo plan debería ser {3}. Y en cinco años me imagino que estaremos {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">✨ Reflexiva</button>
                 <button type="button" data-plantilla="Quiero confesarte que {1}. Algo que nunca te había dicho es {2}. Y algo que quiero hacer contigo pronto es {3}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🤫 Confesión</button>
+                <button type="button" data-plantilla="Si tuviéramos que ir a una isla desierta llevaría {1}. Lo más loco que haría por ti es {2}. Mi apodo secreto para ti sería {3}. Y si fuéramos superhéroes, tu poder sería {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🏝️ Isla desierta</button>
+                <button type="button" data-plantilla="Nuestra canción debería ser {1}. Si fuéramos personajes de película seríamos {2}. Lo que más extraño cuando no estás es {3}. Y algo que quiero que sepas es {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🎬 Cine y música</button>
+                <button type="button" data-plantilla="Hoy me desperté pensando en {1}. Si pudiéramos viajar a cualquier lugar del mundo iría a {2}. Algo que quiero mejorar de mí para ti es {3}. Gracias por {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🌅 Buenos días</button>
+                <button type="button" data-plantilla="Nuestra primera vez juntos haciendo {1} fue inolvidable porque {2}. Lo que más valoro de nuestra relación es {3}. Y quiero que juntos logremos {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">📖 Nuestra historia</button>
+                <button type="button" data-plantilla="Si fueras un postre serías {1} porque {2}. Lo más tierno que has hecho por mí es {3}. Y algo random que amo de ti es {4}." class="sugerencia text-xs bg-white border border-pink-200 text-pink-600 px-3 py-2 rounded-xl hover:bg-pink-100 transition-all">🍰 Random y tierna</button>
             </div>
         </div>
 
@@ -1225,7 +1694,11 @@ def completar_carta(carta_id):
         conn.commit()
         cursor.close()
         conn.close()
-        return redirect(url_for('ver_cartas', revelada=carta_id))
+        crear_notificacion(
+            codigo, fila[0], identidad['nombre'], 'carta_completada',
+            identidad['nombre'] + ' completó tu carta, ¡ve la sorpresa!', emoji='✨', url='/cartas/ver'
+        )
+        return redirect(url_for('ver_cartas', revelada=carta_id, evento='carta_completada'))
 
     cursor.close()
     conn.close()
@@ -1238,23 +1711,43 @@ def completar_carta(carta_id):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Completar carta</title>
         <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            @keyframes flotar { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+            .emoji-flotante { animation: flotar 2.5s ease-in-out infinite; }
+        </style>
     </head>
     <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4">
         <div class="w-full max-w-xl"><a href="/cartas/ver" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
         <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-xl w-full border border-pink-100 mt-4">
-            <h2 class="text-lg font-bold text-pink-600 mb-1">¡Te dejaron una carta! 💌</h2>
-            <p class="text-xs text-gray-500 mb-6">Completa cada espacio sin ver el resto. ¡Es sorpresa!</p>
+            <p class="emoji-flotante text-4xl text-center mb-2">💌</p>
+            <h2 class="text-lg font-bold text-pink-600 mb-1 text-center">¡Te dejaron una carta!</h2>
+            <p class="text-xs text-gray-500 mb-6 text-center">Completa cada espacio sin ver el resto. ¡Es sorpresa! Puedes usar palabras o emojis.</p>
             {% for et in etiquetas %}
-            <div class="mb-3">
-                <label class="block text-xs text-gray-500 mb-1">Espacio {{ loop.index }}: {{ et }}</label>
-                <input type="text" name="respuesta_{{ loop.index }}" required
-                    class="w-full px-4 py-2 rounded-xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none">
+            {% set n = loop.index %}
+            <div class="mb-4">
+                <label class="block text-xs text-gray-500 mb-1">Espacio {{ n }}: {{ et }}</label>
+                <input type="text" name="respuesta_{{ n }}" id="campo-{{ n }}" required
+                    class="w-full px-4 py-2 rounded-xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-1">
+                <div class="flex flex-wrap gap-1">
+                    {% for e in ['😍','😂','🥰','😘','🔥','💗','🤩','😭','🍫','🌹','✨','😏'] %}
+                    <span class="emoji-pick text-lg cursor-pointer hover:scale-125 transition-transform" data-campo="campo-{{ n }}" data-emoji="{{ e }}">{{ e }}</span>
+                    {% endfor %}
+                </div>
             </div>
             {% endfor %}
             <button type="submit" class="mt-3 w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-6 rounded-2xl shadow-md transition-all active:scale-[0.98]">
                 Revelar carta ✨
             </button>
         </form>
+        <script>
+            document.querySelectorAll('.emoji-pick').forEach(function(el){
+                el.addEventListener('click', function(){
+                    var campo = document.getElementById(el.getAttribute('data-campo'));
+                    campo.value = (campo.value + ' ' + el.getAttribute('data-emoji')).trim();
+                    campo.focus();
+                });
+            });
+        </script>
     </body>
     </html>
     '''
@@ -1287,7 +1780,8 @@ def ver_cartas():
             'id': cid, 'autor_slot': autor_slot, 'autor_nombre': autor_nombre, 'autor_genero': autor_genero,
             'respondida': respondida, 'contenido_final': contenido_final, 'completado_por': completado_por,
             'es_mia': autor_slot == identidad['slot'],
-            'fecha': creado_en.strftime('%d/%m/%Y') if creado_en else ''
+            'es_libre': completado_por == autor_nombre,
+            'fecha': creado_en.strftime('%d/%m/%Y %H:%M') if creado_en else ''
         })
 
     html_ver_cartas = '''
@@ -1326,7 +1820,11 @@ def ver_cartas():
                 {% else %} border-gray-200 {% endif %}
             ">
                 {% if c.respondida %}
-                    <p class="text-xs font-bold uppercase text-gray-400 mb-2">De {{ c.autor_nombre }} · completada por {{ c.completado_por }}</p>
+                    {% if c.es_libre %}
+                        <p class="text-xs font-bold uppercase text-gray-400 mb-2">📜 Carta directa de {{ c.autor_nombre }}</p>
+                    {% else %}
+                        <p class="text-xs font-bold uppercase text-gray-400 mb-2">De {{ c.autor_nombre }} · completada por {{ c.completado_por }}</p>
+                    {% endif %}
                     <p class="text-gray-700 whitespace-pre-wrap">{{ c.contenido_final }}</p>
                     {% if c.id == revelada %}<p class="text-xs text-pink-400 mt-2">✨ ¡Sorpresa revelada! ✨</p>{% endif %}
                 {% elif c.es_mia %}
@@ -1346,7 +1844,8 @@ def ver_cartas():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_cartas, cartas=cartas, revelada=revelada))
+    return con_mascota(render_template_string(html_ver_cartas, cartas=cartas, revelada=revelada),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 # === RECUERDOS (línea de tiempo) ===
@@ -1384,7 +1883,7 @@ def agregar_recuerdo():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_recuerdos'))
+            return redirect(url_for('ver_recuerdos', evento='recuerdo'))
 
     html_agregar = '''
     <!DOCTYPE html>
@@ -1487,7 +1986,8 @@ def ver_recuerdos():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_recuerdos, recuerdos=recuerdos))
+    return con_mascota(render_template_string(html_ver_recuerdos, recuerdos=recuerdos),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 # === PLAYLIST (YouTube) ===
@@ -1546,7 +2046,7 @@ def agregar_cancion():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_playlist'))
+            return redirect(url_for('ver_playlist', evento='cancion'))
 
     html_agregar = '''
     <!DOCTYPE html>
@@ -1704,7 +2204,8 @@ def ver_playlist():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_playlist, canciones=canciones))
+    return con_mascota(render_template_string(html_ver_playlist, canciones=canciones),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 # === PLANES JUNTOS ===
@@ -1754,7 +2255,7 @@ def agregar_plan():
             conn.commit()
             cursor.close()
             conn.close()
-            return redirect(url_for('ver_planes'))
+            return redirect(url_for('ver_planes', evento='plan'))
 
     html_agregar = '''
     <!DOCTYPE html>
@@ -1827,7 +2328,7 @@ def ver_planes():
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute(
-        'SELECT id, nombre, genero, titulo, descripcion, imagen_url, estado FROM planes WHERE espacio = %s ORDER BY creado_en DESC',
+        'SELECT id, nombre, genero, titulo, descripcion, imagen_url, estado, creado_en FROM planes WHERE espacio = %s ORDER BY creado_en DESC',
         (codigo,)
     )
     filas = cursor.fetchall()
@@ -1835,10 +2336,11 @@ def ver_planes():
     conn.close()
 
     planes = []
-    for pid, nombre, genero, titulo, descripcion, imagen_url, estado in filas:
+    for pid, nombre, genero, titulo, descripcion, imagen_url, estado, creado_en in filas:
         planes.append({
             'id': pid, 'nombre': nombre, 'genero': genero, 'titulo': titulo,
-            'descripcion': descripcion, 'imagen_url': imagen_url, 'estado': estado
+            'descripcion': descripcion, 'imagen_url': imagen_url, 'estado': estado,
+            'fecha': creado_en.strftime('%d/%m/%Y') if creado_en else ''
         })
 
     html_ver_planes = '''
@@ -1887,7 +2389,7 @@ def ver_planes():
                         {% endif %}
                     </div>
                     {% if p.descripcion %}<p class="text-sm text-gray-600 mb-2">{{ p.descripcion }}</p>{% endif %}
-                    <p class="text-[10px] text-gray-400 mb-3">Agregado por {{ p.nombre }}</p>
+                    <p class="text-[10px] text-gray-400 mb-3">Agregado por {{ p.nombre }} · {{ p.fecha }}</p>
                     {% if p.estado != 'cumplido' %}
                     <form method="POST" action="/planes/marcar/{{ p.id }}">
                         <button type="submit" class="w-full text-xs bg-pink-500 hover:bg-pink-600 text-white font-semibold py-2 rounded-xl transition-all">
@@ -1902,7 +2404,8 @@ def ver_planes():
     </body>
     </html>
     '''
-    return con_mascota(render_template_string(html_ver_planes, planes=planes))
+    return con_mascota(render_template_string(html_ver_planes, planes=planes),
+                        mensaje_evento=mensaje_evento(request.args.get('evento')))
 
 
 @app.route('/planes/marcar/<int:plan_id>', methods=['POST'])
@@ -1918,7 +2421,669 @@ def marcar_plan(plan_id):
     conn.commit()
     cursor.close()
     conn.close()
-    return redirect(url_for('ver_planes'))
+    return redirect(url_for('ver_planes', evento='plan_cumplido'))
+
+
+# === JUEGOS ===
+PREGUNTAS_TRIVIA = [
+    "Mi color favorito es...",
+    "Mi comida favorita es...",
+    "Si pudiera viajar a cualquier lugar del mundo iría a...",
+    "Algo que me hace muy feliz es...",
+    "Mi película o serie favorita es...",
+]
+
+VERDADES = [
+    "¿Cuál fue tu primera impresión de mí?", "¿Cuál es tu recuerdo favorito de nosotros?",
+    "¿Qué es lo que más te gusta de mí físicamente?", "¿Cuál ha sido el momento más vergonzoso que has vivido?",
+    "¿Qué canción te recuerda a mí?", "¿Cuál es tu mayor sueño en la vida?",
+    "¿Qué es lo que más admiras de nuestra relación?", "¿Cuál sería tu cita perfecta conmigo?",
+    "¿Qué es algo que siempre quisiste decirme y no te habías animado?", "¿Cuál es tu miedo más grande?",
+]
+RETOS = [
+    "Mándame un audio cantando algo random", "Escríbeme un piropo súper cursi ahora mismo",
+    "Cuéntame un chiste malo", "Mándame la última foto de tu galería",
+    "Dime tres cosas que amas de mí sin pensarlo", "Imita mi forma de hablar en un audio",
+    "Mándame un emoji que resuma cómo te sientes ahora", "Cuéntame algo random que nadie más sepa de ti",
+    "Escríbeme un mini poema de 4 líneas para mí", "Dime cuál sería nuestro nombre de pareja famosa",
+]
+
+DIRECCIONES_PENAL = ['izquierda', 'centro', 'derecha']
+
+
+@app.route('/juegos')
+def juegos_menu():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    ocupados = obtener_usuarios(codigo)
+
+    if len(ocupados) < 2 or not ambos_en_linea(codigo):
+        html_esperando = '''
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Juegos</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <meta http-equiv="refresh" content="8">
+        </head>
+        <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4 text-center">
+            <div class="w-full max-w-md mb-4"><a href="/espacio" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver al espacio</a></div>
+            <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-pink-100">
+                <span class="text-5xl">🎮</span>
+                <h1 class="text-xl font-bold text-pink-600 mt-4 mb-2">Esperando a que ambos estén en línea</h1>
+                <p class="text-sm text-gray-500">Los juegos son para disfrutarlos juntos. Cuando los dos estén conectados al mismo tiempo, esta pantalla se actualizará sola. 💗</p>
+            </div>
+        </body>
+        </html>
+        '''
+        return con_mascota(html_esperando)
+
+    return pagina_menu('Juegos', '🎮', [
+        {'url': '/juegos/verdad-o-reto', 'emoji': '🎡', 'texto': 'Verdad o Reto'},
+        {'url': '/juegos/trivia', 'emoji': '💭', 'texto': '¿Qué tanto me conoces?'},
+        {'url': '/juegos/ahorcado', 'emoji': '🔤', 'texto': 'Ahorcado en pareja'},
+        {'url': '/juegos/penales', 'emoji': '⚽', 'texto': 'Penales'},
+    ])
+
+
+# --- Verdad o Reto ---
+@app.route('/juegos/verdad-o-reto')
+def verdad_o_reto():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Verdad o Reto</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            @keyframes girar { from { transform: rotate(0deg); } to { transform: rotate(1080deg); } }
+            .girando { animation: girar 1.2s cubic-bezier(0.2,0.8,0.2,1); }
+        </style>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4 text-center">
+        <div class="w-full max-w-md mb-4"><a href="/juegos" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver a juegos</a></div>
+        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-pink-100">
+            <span id="ruleta" class="text-6xl block mb-4">🎡</span>
+            <div id="resultado" class="min-h-[90px] flex items-center justify-center text-lg font-semibold text-pink-600 px-2">
+                Elige y gira la ruleta para empezar
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button onclick="jugar('verdad')" class="flex-1 bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 rounded-2xl transition-all active:scale-95">💭 Verdad</button>
+                <button onclick="jugar('reto')" class="flex-1 bg-white border-2 border-pink-300 hover:bg-pink-50 text-pink-600 font-semibold py-3 rounded-2xl transition-all active:scale-95">🎯 Reto</button>
+            </div>
+        </div>
+        <script>
+            var VERDADES = ''' + json.dumps(VERDADES) + ''';
+            var RETOS = ''' + json.dumps(RETOS) + ''';
+            function jugar(tipo) {
+                var ruleta = document.getElementById('ruleta');
+                var resultado = document.getElementById('resultado');
+                ruleta.classList.remove('girando');
+                void ruleta.offsetWidth;
+                ruleta.classList.add('girando');
+                resultado.textContent = '...';
+                setTimeout(function() {
+                    var lista = tipo === 'verdad' ? VERDADES : RETOS;
+                    var elegido = lista[Math.floor(Math.random() * lista.length)];
+                    resultado.textContent = (tipo === 'verdad' ? '💭 ' : '🎯 ') + elegido;
+                }, 900);
+            }
+        </script>
+    </body>
+    </html>
+    '''
+    return con_mascota(html)
+
+
+# --- Trivia: ¿Qué tanto me conoces? ---
+@app.route('/juegos/trivia', methods=['GET', 'POST'])
+def trivia_juego():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+
+    if request.method == 'POST':
+        respuestas = [request.form.get('pregunta_' + str(i), '').strip() for i in range(len(PREGUNTAS_TRIVIA))]
+        preguntas_payload = [{'pregunta': p, 'respuesta': r} for p, r in zip(PREGUNTAS_TRIVIA, respuestas)]
+        conn = get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO trivia_juegos (espacio, autor_slot, preguntas) VALUES (%s, %s, %s)',
+            (codigo, identidad['slot'], json.dumps(preguntas_payload))
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        crear_notificacion(
+            codigo, otro_slot(identidad['slot']), identidad['nombre'], 'trivia',
+            identidad['nombre'] + ' te retó a un trivia: ¿Qué tanto me conoces? 💭', emoji='💭', url='/juegos/trivia'
+        )
+        return redirect(url_for('trivia_juego'))
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, autor_slot, preguntas, estado, puntaje FROM trivia_juegos WHERE espacio = %s ORDER BY creado_en DESC LIMIT 5',
+        (codigo,)
+    )
+    filas = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    pendiente_de_adivinar = None
+    esperando_pareja = False
+    resultados = []
+    for tid, autor_slot, preguntas_json, estado, puntaje in filas:
+        if estado == 'esperando_adivinanza' and autor_slot != identidad['slot']:
+            pendiente_de_adivinar = {'id': tid, 'preguntas': json.loads(preguntas_json)}
+        elif estado == 'esperando_adivinanza' and autor_slot == identidad['slot']:
+            esperando_pareja = True
+        elif estado == 'completado':
+            resultados.append({'id': tid, 'puntaje': puntaje, 'total': len(json.loads(preguntas_json))})
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>¿Qué tanto me conoces?</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
+        <div class="w-full max-w-lg mb-6"><a href="/juegos" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver a juegos</a></div>
+        <h1 class="text-2xl font-bold text-pink-600 text-center mb-2">💭 ¿Qué tanto me conoces?</h1>
+        <p class="text-xs text-gray-500 text-center mb-8 max-w-md">Responde sobre ti mismo/a y luego tu pareja intentará adivinar tus respuestas.</p>
+
+        {% if pendiente %}
+        <div class="bg-white p-6 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100 mb-6">
+            <p class="font-bold text-pink-600 mb-3">¡Tienes un trivia por adivinar! 🎯</p>
+            <a href="/juegos/trivia/jugar/{{ pendiente.id }}" class="inline-block bg-pink-500 hover:bg-pink-600 text-white text-sm font-semibold py-2 px-4 rounded-xl transition-all">Adivinar ahora</a>
+        </div>
+        {% elif esperando %}
+        <div class="bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm p-4 rounded-2xl max-w-lg w-full mb-6">
+            Ya creaste tu trivia, esperando a que tu pareja adivine tus respuestas... 💭
+        </div>
+        {% else %}
+        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100 mb-6">
+            <p class="text-xs text-gray-500 mb-4">Responde estas preguntas sobre ti. ¡Tu pareja no verá las respuestas hasta que adivine!</p>
+            {% for p in preguntas %}
+            <div class="mb-3">
+                <label class="block text-xs text-gray-500 mb-1">{{ p }}</label>
+                <input type="text" name="pregunta_{{ loop.index0 }}" required class="w-full px-4 py-2 rounded-xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none">
+            </div>
+            {% endfor %}
+            <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 rounded-2xl shadow-md transition-all active:scale-[0.98] mt-2">Enviar mis respuestas ✨</button>
+        </form>
+        {% endif %}
+
+        {% if resultados %}
+        <div class="max-w-lg w-full space-y-2">
+            <p class="text-xs text-gray-400 uppercase font-bold mb-1">Resultados anteriores</p>
+            {% for r in resultados %}
+            <div class="bg-white rounded-xl border border-pink-100 p-3 text-sm text-gray-600 flex justify-between">
+                <span>Trivia #{{ r.id }}</span>
+                <span class="font-bold text-pink-600">{{ r.puntaje }} / {{ r.total }} ✅</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(
+        html, preguntas=PREGUNTAS_TRIVIA, pendiente=pendiente_de_adivinar,
+        esperando=esperando_pareja, resultados=resultados
+    ))
+
+
+@app.route('/juegos/trivia/jugar/<int:trivia_id>', methods=['GET', 'POST'])
+def trivia_jugar(trivia_id):
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT autor_slot, preguntas, estado FROM trivia_juegos WHERE id = %s AND espacio = %s',
+        (trivia_id, codigo)
+    )
+    fila = cursor.fetchone()
+
+    if not fila or fila[0] == identidad['slot'] or fila[2] != 'esperando_adivinanza':
+        cursor.close()
+        conn.close()
+        return redirect(url_for('trivia_juego'))
+
+    autor_slot, preguntas_json, estado = fila
+    preguntas = json.loads(preguntas_json)
+
+    if request.method == 'POST':
+        puntaje = 0
+        respuestas_guess = []
+        for i, p in enumerate(preguntas):
+            guess = request.form.get('adivinanza_' + str(i), '').strip()
+            respuestas_guess.append(guess)
+            if guess.lower() == p['respuesta'].strip().lower():
+                puntaje += 1
+
+        cursor.execute(
+            'UPDATE trivia_juegos SET adivinador_slot = %s, respuestas_adivinador = %s, puntaje = %s, estado = %s WHERE id = %s',
+            (identidad['slot'], json.dumps(respuestas_guess), puntaje, 'completado', trivia_id)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        crear_notificacion(
+            codigo, autor_slot, identidad['nombre'], 'trivia_resultado',
+            identidad['nombre'] + ' terminó el trivia, ¡mira cuánto te conoce!', emoji='🎉', url='/juegos/trivia/resultado/' + str(trivia_id)
+        )
+        return redirect(url_for('trivia_resultado', trivia_id=trivia_id))
+
+    cursor.close()
+    conn.close()
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Adivina</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
+        <div class="w-full max-w-lg mb-6"><a href="/juegos/trivia" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
+        <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100">
+            <h2 class="text-lg font-bold text-pink-600 mb-4">Adivina las respuestas de tu pareja 🎯</h2>
+            {% for p in preguntas %}
+            <div class="mb-3">
+                <label class="block text-xs text-gray-500 mb-1">{{ p.pregunta }}</label>
+                <input type="text" name="adivinanza_{{ loop.index0 }}" required class="w-full px-4 py-2 rounded-xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none">
+            </div>
+            {% endfor %}
+            <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 rounded-2xl shadow-md transition-all active:scale-[0.98] mt-2">Revelar puntaje ✨</button>
+        </form>
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(html, preguntas=preguntas))
+
+
+@app.route('/juegos/trivia/resultado/<int:trivia_id>')
+def trivia_resultado(trivia_id):
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT preguntas, respuestas_adivinador, puntaje FROM trivia_juegos WHERE id = %s AND espacio = %s',
+        (trivia_id, codigo)
+    )
+    fila = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not fila:
+        return redirect(url_for('trivia_juego'))
+
+    preguntas = json.loads(fila[0])
+    adivinanzas = json.loads(fila[1]) if fila[1] else []
+    puntaje = fila[2]
+    comparacion = []
+    for i, p in enumerate(preguntas):
+        guess = adivinanzas[i] if i < len(adivinanzas) else ''
+        acerto = guess.strip().lower() == p['respuesta'].strip().lower()
+        comparacion.append({'pregunta': p['pregunta'], 'real': p['respuesta'], 'guess': guess, 'acerto': acerto})
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Resultado</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
+        <div class="w-full max-w-lg mb-6"><a href="/juegos/trivia" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver</a></div>
+        <div class="text-center mb-6">
+            <span class="text-5xl">🎉</span>
+            <h1 class="text-2xl font-bold text-pink-600 mt-2">{{ puntaje }} / {{ comparacion|length }} respuestas correctas</h1>
+        </div>
+        <div class="max-w-lg w-full space-y-3">
+            {% for c in comparacion %}
+            <div class="bg-white rounded-2xl border-2 {% if c.acerto %} border-green-200 {% else %} border-red-100 {% endif %} p-4">
+                <p class="text-xs text-gray-500 mb-1">{{ c.pregunta }}</p>
+                <p class="text-sm"><b>Respuesta real:</b> {{ c.real }}</p>
+                <p class="text-sm"><b>Adivinanza:</b> {{ c.guess }} {% if c.acerto %} ✅ {% else %} ❌ {% endif %}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(html, comparacion=comparacion, puntaje=puntaje))
+
+
+# --- Ahorcado en pareja ---
+@app.route('/juegos/ahorcado', methods=['GET', 'POST'])
+def ahorcado_juego():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+
+    if request.method == 'POST':
+        palabra = request.form.get('palabra', '').strip().upper()
+        pista = request.form.get('pista', '').strip()
+        if palabra:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO ahorcado_juegos (espacio, autor_slot, palabra, pista) VALUES (%s, %s, %s, %s)',
+                (codigo, identidad['slot'], palabra, pista)
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+            crear_notificacion(
+                codigo, otro_slot(identidad['slot']), identidad['nombre'], 'ahorcado',
+                identidad['nombre'] + ' te retó a adivinar una palabra secreta 🔤', emoji='🔤', url='/juegos/ahorcado'
+            )
+        return redirect(url_for('ahorcado_juego'))
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, autor_slot, palabra, pista, letras_probadas, vidas, estado FROM ahorcado_juegos '
+        'WHERE espacio = %s ORDER BY creado_en DESC LIMIT 1',
+        (codigo,)
+    )
+    fila = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    juego = None
+    if fila:
+        gid, autor_slot, palabra, pista, letras_probadas, vidas, estado = fila
+        letras = letras_probadas.split(',') if letras_probadas else []
+        mostrar = ' '.join([c if c in letras or c == ' ' else '_' for c in palabra])
+        juego = {
+            'id': gid, 'autor_slot': autor_slot, 'es_autor': autor_slot == identidad['slot'],
+            'pista': pista, 'letras': letras, 'vidas': vidas, 'estado': estado,
+            'mostrar': mostrar, 'palabra': palabra if estado != 'jugando' else None
+        }
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Ahorcado en pareja</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <meta http-equiv="refresh" content="12">
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
+        <div class="w-full max-w-lg mb-6"><a href="/juegos" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver a juegos</a></div>
+        <h1 class="text-2xl font-bold text-pink-600 text-center mb-6">🔤 Ahorcado en pareja</h1>
+
+        {% if not juego or juego.estado != 'jugando' %}
+            {% if juego and juego.estado != 'jugando' %}
+            <div class="bg-white p-6 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100 mb-6 text-center">
+                {% if juego.estado == 'ganado' %}
+                    <p class="text-2xl mb-2">🎉</p><p class="font-bold text-green-600">¡Adivinaron la palabra! Era "{{ juego.palabra }}"</p>
+                {% else %}
+                    <p class="text-2xl mb-2">😢</p><p class="font-bold text-red-500">Se acabaron las vidas. Era "{{ juego.palabra }}"</p>
+                {% endif %}
+            </div>
+            {% endif %}
+            <form method="POST" class="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100">
+                <p class="text-xs text-gray-500 mb-4">Elige una palabra secreta (algo de ustedes dos) para que tu pareja adivine.</p>
+                <input type="text" name="palabra" placeholder="Palabra secreta" required class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-3">
+                <input type="text" name="pista" placeholder="Pista (opcional)" class="w-full px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none mb-4">
+                <button type="submit" class="w-full bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 rounded-2xl shadow-md transition-all active:scale-[0.98]">Crear palabra secreta 🔒</button>
+            </form>
+        {% elif juego.es_autor %}
+            <div class="bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm p-4 rounded-2xl max-w-lg w-full text-center">
+                Tu pareja está adivinando tu palabra secreta... 🤫 (esta página se actualiza sola)
+            </div>
+        {% else %}
+            <div class="bg-white p-8 rounded-3xl shadow-xl max-w-lg w-full border border-pink-100 text-center">
+                {% if juego.pista %}<p class="text-xs text-gray-400 mb-2">Pista: {{ juego.pista }}</p>{% endif %}
+                <p class="text-3xl font-mono tracking-widest text-pink-600 mb-4">{{ juego.mostrar }}</p>
+                <p class="text-sm text-gray-500 mb-4">Vidas: {% for i in range(juego.vidas) %}🐻{% endfor %}</p>
+                <form method="POST" action="/juegos/ahorcado/letra" class="grid grid-cols-7 gap-1">
+                    {% for l in 'ABCDEFGHIJKLMNÑOPQRSTUVWXYZ' %}
+                    <button type="submit" name="letra" value="{{ l }}" {% if l in juego.letras %}disabled{% endif %}
+                        class="text-xs font-bold py-2 rounded-lg {% if l in juego.letras %} bg-gray-100 text-gray-300 {% else %} bg-pink-50 hover:bg-pink-200 text-pink-600 {% endif %}">{{ l }}</button>
+                    {% endfor %}
+                </form>
+            </div>
+        {% endif %}
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(html, juego=juego))
+
+
+@app.route('/juegos/ahorcado/letra', methods=['POST'])
+def ahorcado_letra():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+    letra = request.form.get('letra', '').strip().upper()
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, autor_slot, palabra, letras_probadas, vidas, estado FROM ahorcado_juegos '
+        'WHERE espacio = %s ORDER BY creado_en DESC LIMIT 1',
+        (codigo,)
+    )
+    fila = cursor.fetchone()
+
+    if fila and fila[5] == 'jugando' and fila[1] != identidad['slot'] and letra:
+        gid, autor_slot, palabra, letras_probadas, vidas, estado = fila
+        letras = letras_probadas.split(',') if letras_probadas else []
+        if letra not in letras:
+            letras.append(letra)
+            if letra not in palabra:
+                vidas -= 1
+            nuevo_estado = 'jugando'
+            if vidas <= 0:
+                nuevo_estado = 'perdido'
+            elif all(c in letras or c == ' ' for c in palabra):
+                nuevo_estado = 'ganado'
+            cursor.execute(
+                'UPDATE ahorcado_juegos SET letras_probadas = %s, vidas = %s, estado = %s WHERE id = %s',
+                (','.join(letras), vidas, nuevo_estado, gid)
+            )
+            conn.commit()
+            if nuevo_estado in ('ganado', 'perdido'):
+                crear_notificacion(
+                    codigo, autor_slot, identidad['nombre'], 'ahorcado_resultado',
+                    'El ahorcado terminó: ' + ('¡lo lograron! 🎉' if nuevo_estado == 'ganado' else 'se acabaron las vidas 😢'),
+                    emoji='🔤', url='/juegos/ahorcado'
+                )
+    cursor.close()
+    conn.close()
+    return redirect(url_for('ahorcado_juego'))
+
+
+# --- Penales ---
+@app.route('/juegos/penales')
+def penales_juego():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    ocupados = obtener_usuarios(codigo)
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('SELECT slot, goles, tiros FROM penales_marcador WHERE espacio = %s', (codigo,))
+    filas = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    marcador = {slot: {'goles': g, 'tiros': t} for slot, g, t in filas}
+    tabla = []
+    for s, datos in ocupados.items():
+        m = marcador.get(s, {'goles': 0, 'tiros': 0})
+        tabla.append({'nombre': datos['nombre'], 'genero': datos['genero'], 'goles': m['goles'], 'tiros': m['tiros']})
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Penales</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center py-10 px-4">
+        <div class="w-full max-w-md mb-6"><a href="/juegos" class="text-sm text-gray-400 hover:text-pink-500">&larr; Volver a juegos</a></div>
+        <h1 class="text-2xl font-bold text-pink-600 text-center mb-2">⚽ Penales</h1>
+        <p class="text-xs text-gray-500 text-center mb-6">Pateen 5 penales cada quien y comparen quién mete más goles.</p>
+
+        <div class="max-w-md w-full space-y-2 mb-6">
+            {% for t in tabla %}
+            <div class="bg-white rounded-2xl border-2
+                {% if t.genero == 'hombre' %} border-blue-200
+                {% elif t.genero == 'mujer' %} border-pink-200
+                {% else %} border-gray-200 {% endif %}
+            p-4 flex justify-between items-center">
+                <span class="font-bold text-gray-700">{{ t.nombre }}</span>
+                <span class="text-pink-600 font-bold">{{ t.goles }} goles / {{ t.tiros }} tiros</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <a href="/juegos/penales/jugar" class="w-full max-w-md text-center bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 rounded-2xl shadow-md transition-all active:scale-[0.98]">
+            Patear 5 penales ⚽
+        </a>
+    </body>
+    </html>
+    '''
+    return con_mascota(render_template_string(html, tabla=tabla))
+
+
+@app.route('/juegos/penales/jugar')
+def penales_jugar():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    html = '''
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Pateando penales</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-pink-50 min-h-screen flex flex-col items-center justify-center p-4 text-center">
+        <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-pink-100">
+            <p id="ronda" class="text-xs text-gray-400 mb-2">Tiro 1 de 5</p>
+            <span id="pelota" class="text-6xl block mb-4">⚽</span>
+            <p id="mensaje" class="font-semibold text-pink-600 min-h-[28px] mb-4">Elige dónde patear</p>
+            <div class="flex gap-2">
+                <button onclick="patear('izquierda')" class="flex-1 bg-pink-50 hover:bg-pink-200 text-pink-600 font-bold py-4 rounded-2xl transition-all active:scale-95">⬅️</button>
+                <button onclick="patear('centro')" class="flex-1 bg-pink-50 hover:bg-pink-200 text-pink-600 font-bold py-4 rounded-2xl transition-all active:scale-95">⬆️</button>
+                <button onclick="patear('derecha')" class="flex-1 bg-pink-50 hover:bg-pink-200 text-pink-600 font-bold py-4 rounded-2xl transition-all active:scale-95">➡️</button>
+            </div>
+        </div>
+        <form id="form-guardar" method="POST" action="/juegos/penales/guardar" class="hidden">
+            <input type="hidden" name="goles" id="input-goles">
+        </form>
+        <script>
+            var DIRECCIONES = ['izquierda', 'centro', 'derecha'];
+            var tiro = 0, goles = 0;
+            function patear(direccion) {
+                var portero = DIRECCIONES[Math.floor(Math.random() * 3)];
+                tiro++;
+                var mensaje = document.getElementById('mensaje');
+                if (portero !== direccion) {
+                    goles++;
+                    mensaje.textContent = '¡GOOOL! ⚽🎉';
+                    mensaje.className = 'font-semibold text-green-600 min-h-[28px] mb-4';
+                } else {
+                    mensaje.textContent = '¡Atajada del portero! 🧤';
+                    mensaje.className = 'font-semibold text-red-500 min-h-[28px] mb-4';
+                }
+                if (tiro >= 5) {
+                    setTimeout(function() {
+                        document.getElementById('input-goles').value = goles;
+                        document.getElementById('form-guardar').submit();
+                    }, 900);
+                } else {
+                    document.getElementById('ronda').textContent = 'Tiro ' + (tiro + 1) + ' de 5';
+                }
+            }
+        </script>
+    </body>
+    </html>
+    '''
+    return con_mascota(html)
+
+
+@app.route('/juegos/penales/guardar', methods=['POST'])
+def penales_guardar():
+    redir = requiere_espacio_e_identidad()
+    if redir:
+        return redir
+
+    codigo = session['espacio_activo']
+    identidad = mi_identidad()
+    goles = request.form.get('goles', type=int) or 0
+    goles = max(0, min(5, goles))
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO penales_marcador (espacio, slot, goles, tiros) VALUES (%s, %s, %s, 5) '
+        'ON CONFLICT (espacio, slot) DO UPDATE SET goles = penales_marcador.goles + %s, tiros = penales_marcador.tiros + 5',
+        (codigo, identidad['slot'], goles, goles)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    crear_notificacion(
+        codigo, otro_slot(identidad['slot']), identidad['nombre'], 'penales',
+        identidad['nombre'] + ' metió ' + str(goles) + '/5 penales ⚽', emoji='⚽', url='/juegos/penales'
+    )
+    return redirect(url_for('penales_juego'))
 
 
 # === CERRAR SESIÓN ===
